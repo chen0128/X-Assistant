@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>X助手 · 控制台</title>
+    <link rel="stylesheet" href="dashboard.css">
+  </head>
+  <body>
+    <main>
+      <header class="page-header">
+        <div>
+          <p class="eyebrow">X AUTOMATION</p>
+          <h1>X助手</h1>
+          <p class="subtitle">自动任务控制台 · 作者 <a href="https://x.com/Pengchenop" target="_blank" rel="noreferrer">@Pengchenop</a></p>
+        </div>
+        <span class="web-badge">网页版</span>
+      </header>
+      <section class="target-panel" aria-label="操作标签页">
+        <div class="target-heading">
+          <label for="targetTab">操作标签页</label>
+          <button id="refreshTabs" class="quiet-button" type="button">刷新列表</button>
+        </div>
+        <select id="targetTab" aria-describedby="pageStatus"></select>
+      </section>
+      <p id="pageStatus" role="status">正在检查当前页面…</p>
+      <p id="taskStatus" role="status">正在读取任务状态…</p>
+      <p id="actionStatus" role="status" hidden></p>
+      <section class="task-category" aria-labelledby="engagementHeading">
+        <div class="category-heading">
+          <div><h2 id="engagementHeading">关注 / 评论</h2><p>按所选内容筛选并执行互动</p></div>
+          <span class="task-state" data-state-for="engagement">未运行</span>
+        </div>
+        <fieldset class="task-options">
+          <legend>互动子任务</legend>
+          <label><input id="homeFollowMutualPosts" type="checkbox"> 功能一：首页内容识别到互关贴进行关注</label>
+          <label><input id="homeReplyMutualPosts" type="checkbox"> 功能二：首页内容识别到互关贴进行评论</label>
+          <label><input id="ownPostCommentReply" type="checkbox"> 我的帖子：自动回复他人评论</label>
+          <small>两项首页互关功能可单独运行；同时勾选时先关注作者，再评论帖子。保留关键词识别，并让 AI 补判未命中的互关 / 交友帖。我的帖子任务只在自己发布的单帖页面回复他人评论，同一条评论不会重复回复。</small>
+        </fieldset>
+        <div class="category-actions">
+          <button class="primary" type="button" data-start-task="engagement">开始关注 / 评论</button>
+          <button class="danger" type="button" data-stop-task="engagement">停止</button>
+        </div>
+      </section>
+      <section class="task-category" aria-labelledby="unfollowHeading">
+        <div class="category-heading">
+          <div><h2 id="unfollowHeading">取消单向关注</h2><p>检查“正在关注”列表，取消没有关注你的账号</p></div>
+          <span class="task-state" data-state-for="unfollowNonMutual">未运行</span>
+        </div>
+        <div class="relationship-limits">
+          <label>执行数量（个）<input id="unfollowAccountLimit" type="number" min="1" max="1000" step="1"></label>
+          <label>操作间隔（秒）<input id="unfollowIntervalSeconds" type="number" min="1" max="3600" step="1"></label>
+        </div>
+        <div class="category-actions">
+          <button class="primary" type="button" data-start-task="unfollowNonMutual">开始清理</button>
+          <button class="danger" type="button" data-stop-task="unfollowNonMutual">停止</button>
+        </div>
+      </section>
+      <section class="task-category" aria-labelledby="followBackHeading">
+        <div class="category-heading">
+          <div><h2 id="followBackHeading">回关关注者</h2><p>检查“关注者”列表，回关你尚未关注的账号</p></div>
+          <span class="task-state" data-state-for="followBackFollowers">未运行</span>
+        </div>
+        <div class="relationship-limits">
+          <label>执行数量（个）<input id="followBackAccountLimit" type="number" min="1" max="1000" step="1"></label>
+          <label>操作间隔（秒）<input id="followBackIntervalSeconds" type="number" min="1" max="3600" step="1"></label>
+        </div>
+        <div class="category-actions">
+          <button class="primary" type="button" data-start-task="followBackFollowers">开始回关</button>
+          <button class="danger" type="button" data-stop-task="followBackFollowers">停止</button>
+        </div>
+      </section>
+      <label class="idle-refresh-setting" for="idleRefreshMinutes">无新内容或评论后刷新</label>
+      <select id="idleRefreshMinutes">
+        <option value="1">1 分钟</option>
+        <option value="3" selected>3 分钟</option>
+        <option value="5">5 分钟</option>
+        <option value="10">10 分钟</option>
+      </select>
+      <button id="openX" class="primary" type="button">打开 X</button>
+      <button id="openOptions" type="button">设置模型 API</button>
+      <p class="note">首页任务会自动下滑加载内容；长时间没有新内容时自动刷新。停止后会取消后续操作。</p>
+    </main>
+    <script src="dashboard.js"></script>
+  </body>
+</html>

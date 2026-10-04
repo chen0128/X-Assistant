@@ -1,0 +1,45 @@
+.x-mutual-helper-badge {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 8px 0;
+  padding: 8px 10px;
+  border: 1px solid #8b98a5;
+  border-radius: 10px;
+  color: #536471;
+  font: 13px/1.4 system-ui, sans-serif;
+}
+
+.x-mutual-helper-badge button,
+.x-mutual-helper-dialog button {
+  border: 0;
+  border-radius: 999px;
+  padding: 7px 12px;
+  background: #1d9bf0;
+  color: white;
+  font: inherit;
+  cursor: pointer;
+}
+
+.x-mutual-helper-dialog {
+  width: min(480px, calc(100vw - 40px));
+  border: 1px solid #cfd9de;
+  border-radius: 16px;
+  padding: 20px;
+  color: #0f1419;
+  font: 14px/1.5 system-ui, sans-serif;
+}
+
+.x-mutual-helper-dialog::backdrop { background: #0008; }
+.x-mutual-helper-dialog h2 { font-size: 17px; margin: 0 0 12px; }
+.x-mutual-helper-dialog textarea {
+  box-sizing: border-box;
+  width: 100%;
+  resize: vertical;
+  margin: 0 0 12px;
+  border: 1px solid #cfd9de;
+  border-radius: 10px;
+  padding: 10px;
+  font: inherit;
+}
