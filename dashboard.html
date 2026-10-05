@@ -35,8 +35,11 @@
           <legend>互动子任务</legend>
           <label><input id="homeFollowMutualPosts" type="checkbox"> 功能一：首页内容识别到互关贴进行关注</label>
           <label><input id="homeReplyMutualPosts" type="checkbox"> 功能二：首页内容识别到互关贴进行评论</label>
+          <label><input id="autoFollowBack" type="checkbox"> 自动回关新关注者（可与功能二同时运行，限速后每 3 分钟重试）</label>
+          <p id="followerMonitorStatus" role="status"></p>
+          <small>自动回关会打开后台关注者标签页，定期刷新检查；沿用下方回关操作间隔（秒），持续扫描，不使用单次回关的数量上限。</small>
           <label><input id="ownPostCommentReply" type="checkbox"> 我的帖子：自动回复他人评论</label>
-          <small>两项首页互关功能可单独运行；同时勾选时先关注作者，再评论帖子。保留关键词识别，并让 AI 补判未命中的互关 / 交友帖。我的帖子任务只在自己发布的单帖页面回复他人评论，同一条评论不会重复回复。</small>
+          <small>两项首页互关功能可单独运行；同时勾选时先关注作者，再评论帖子。互关帖仅通过关键词识别。我的帖子任务只在自己发布的单帖页面回复他人评论，同一条评论不会重复回复。</small>
         </fieldset>
         <div class="category-actions">
           <button class="primary" type="button" data-start-task="engagement">开始关注 / 评论</button>
@@ -79,7 +82,7 @@
         <option value="10">10 分钟</option>
       </select>
       <button id="openX" class="primary" type="button">打开 X</button>
-      <button id="openOptions" type="button">设置模型 API</button>
+      <button id="openOptions" type="button">回复 / API 设置</button>
       <p class="note">首页任务会自动下滑加载内容；长时间没有新内容时自动刷新。停止后会取消后续操作。</p>
     </main>
     <script src="dashboard.js"></script>

@@ -1,3 +1,4 @@
+const autoFollowBackOption = document.getElementById("autoFollowBack");
 const pageStatus = document.getElementById("pageStatus");
 const taskStatus = document.getElementById("taskStatus");
 const actionStatus = document.getElementById("actionStatus");
@@ -20,10 +21,11 @@ const relationshipSettingInputs = Object.fromEntries(Object.keys(RELATIONSHIP_SE
 let activeTab;
 let activeTabIsX = false;
 let taskOptionsReady = false;
+let statusReadVersion = 0;
 
 async function loadTaskOptions() {
   const values = await chrome.storage.local.get([
-    "homeFollowMutualPosts", "homeReplyMutualPosts", "mutualTaskEnabled", "homeAutoFollowMutual", "ownPostCommentReply", "autoReply", "autoFollow",
+    "autoFollowBack", "homeFollowMutualPosts", "homeReplyMutualPosts", "mutualTaskEnabled", "homeAutoFollowMutual", "ownPostCommentReply", "autoReply", "autoFollow",
     "idleRefreshMinutes",
     ...Object.keys(RELATIONSHIP_SETTING_DEFAULTS)
   ]);
@@ -34,6 +36,7 @@ async function loadTaskOptions() {
   homeFollowMutualOption.checked = homeFollowMutualPosts;
   homeReplyMutualOption.checked = homeReplyMutualPosts;
   ownPostCommentReplyOption.checked = ownPostCommentReply;
+  autoFollowBackOption.checked = values.autoFollowBack === true;
   await chrome.storage.local.set({ homeFollowMutualPosts, homeReplyMutualPosts, ownPostCommentReply });
   idleRefreshMinutes.value = String([1, 3, 5, 10].includes(Number(values.idleRefreshMinutes)) ? values.idleRefreshMinutes : 3);
   if (![1, 3, 5, 10].includes(Number(values.idleRefreshMinutes))) {
@@ -51,23 +54,27 @@ async function loadTaskOptions() {
 }
 
 async function updateTaskStatus() {
+  const readVersion = ++statusReadVersion;
+  const monitor = await chrome.storage.local.get({ followerMonitorStatus: "" });
   const { automationRunning = false, automationTask = "engagement", lastAutomationError = "", lastAutomationStatus = "" } = await chrome.storage.local.get({
     automationRunning: false,
     automationTask: "engagement",
     lastAutomationError: "",
     lastAutomationStatus: ""
   });
-  const hasSelectedTask = homeFollowMutualOption.checked || homeReplyMutualOption.checked || ownPostCommentReplyOption.checked;
+  if (readVersion !== statusReadVersion) return;
+  document.getElementById("followerMonitorStatus").textContent = autoFollowBackOption.checked ? monitor.followerMonitorStatus : "";
+  const hasSelectedTask = autoFollowBackOption.checked || homeFollowMutualOption.checked || homeReplyMutualOption.checked || ownPostCommentReplyOption.checked;
   const taskLabels = {
     engagement: "关注 / 评论",
     unfollowNonMutual: "取消单向关注",
     followBackFollowers: "回关关注者"
   };
   taskStatus.textContent = automationRunning ? `运行中的任务：${taskLabels[automationTask] || automationTask}` : "任务状态：已停止";
-  const actionMessage = lastAutomationError
-    ? `最近自动任务失败：${lastAutomationError}`
-    : lastAutomationStatus;
+  const actionMessage = [lastAutomationStatus, lastAutomationError
+    ? `最近错误：${lastAutomationError}` : ""].filter(Boolean).join("\n");
   actionStatus.hidden = !actionMessage;
+  actionStatus.style.whiteSpace = "pre-line";
   actionStatus.textContent = actionMessage;
   for (const button of startTaskButtons) {
     const mode = button.dataset.startTask;
@@ -113,20 +120,20 @@ refreshTabsButton.addEventListener("click", updatePageStatus);
 
 async function startTask(mode) {
   if (!activeTab?.id || !activeTabIsX) return;
-  if (mode === "engagement" && !homeFollowMutualOption.checked && !homeReplyMutualOption.checked && !ownPostCommentReplyOption.checked) return;
+  if (mode === "engagement" && !autoFollowBackOption.checked && !homeFollowMutualOption.checked && !homeReplyMutualOption.checked && !ownPostCommentReplyOption.checked) return;
   startTaskButtons.forEach((button) => { button.disabled = true; });
   try {
     let controller = await checkTaskController(activeTab.id);
-    if (controller?.controllerVersion !== 10) {
+    if (controller?.controllerVersion !== 23) {
       taskStatus.textContent = "正在刷新所选 X 页面，以加载新版任务脚本…";
       await chrome.tabs.reload(activeTab.id);
       await waitForTabLoad(activeTab.id);
       controller = await checkTaskController(activeTab.id);
     }
-    if (controller?.controllerVersion !== 10) {
+    if (controller?.controllerVersion !== 23) {
       throw new Error("新版任务脚本仍未响应。请确认扩展已重新加载，再刷新 X 页面重试。");
     }
-    if (mode !== "engagement" && !controller.identityAvailable) {
+    if ((mode !== "engagement" || autoFollowBackOption.checked) && !controller.identityAvailable) {
       throw new Error("无法识别当前登录账号。请确认 X 已登录并等待页面加载完成。");
     }
     if (mode === "engagement" && !controller.feedSupported) {
@@ -136,6 +143,7 @@ async function startTask(mode) {
       throw new Error("请先打开自己发布的帖子详情页，再启动“我的帖子：自动回复他人评论”。");
     }
     const selectedTasks = {
+      autoFollowBack: autoFollowBackOption.checked,
       homeFollowMutualPosts: homeFollowMutualOption.checked,
       homeReplyMutualPosts: homeReplyMutualOption.checked,
       ownPostCommentReply: ownPostCommentReplyOption.checked,
@@ -210,10 +218,11 @@ for (const button of startTaskButtons) {
   button.addEventListener("click", () => startTask(button.dataset.startTask));
 }
 
-for (const option of [homeFollowMutualOption, homeReplyMutualOption, ownPostCommentReplyOption]) {
+for (const option of [autoFollowBackOption, homeFollowMutualOption, homeReplyMutualOption, ownPostCommentReplyOption]) {
   option.addEventListener("change", async () => {
     if (!taskOptionsReady) return;
     await chrome.storage.local.set({
+      autoFollowBack: autoFollowBackOption.checked,
       homeFollowMutualPosts: homeFollowMutualOption.checked,
       homeReplyMutualPosts: homeReplyMutualOption.checked,
       ownPostCommentReply: ownPostCommentReplyOption.checked
@@ -230,7 +239,7 @@ for (const button of stopTaskButtons) {
       automationTask: "engagement"
     });
     if (!automationRunning || automationTask !== mode) return;
-    await chrome.storage.local.set({ automationRunning: false, lastAutomationStatus: "任务已停止" });
+    await chrome.storage.local.set({ automationRunning: false, lastAutomationError: "", lastAutomationStatus: "任务已停止" });
     if (activeTab?.id) {
       chrome.tabs.sendMessage(activeTab.id, { type: "taskControl", running: false }).catch(() => {});
     }
@@ -240,7 +249,7 @@ for (const button of stopTaskButtons) {
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
-  if (changes.automationRunning || changes.lastAutomationError || changes.lastAutomationStatus) updateTaskStatus();
+  if (changes.followerMonitorStatus || changes.autoFollowBack || changes.automationRunning || changes.automationTask || changes.lastAutomationError || changes.lastAutomationStatus) updateTaskStatus();
 });
 
 idleRefreshMinutes.addEventListener("change", () => {
