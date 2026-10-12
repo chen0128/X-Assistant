@@ -67,6 +67,7 @@ async function updateTaskStatus() {
   const hasSelectedTask = autoFollowBackOption.checked || homeFollowMutualOption.checked || homeReplyMutualOption.checked || ownPostCommentReplyOption.checked;
   const taskLabels = {
     engagement: "关注 / 评论",
+    ranking: "榜单博主互动",
     unfollowNonMutual: "取消单向关注",
     followBackFollowers: "回关关注者"
   };
@@ -124,13 +125,13 @@ async function startTask(mode) {
   startTaskButtons.forEach((button) => { button.disabled = true; });
   try {
     let controller = await checkTaskController(activeTab.id);
-    if (controller?.controllerVersion !== 23) {
+    if (controller?.controllerVersion !== 35) {
       taskStatus.textContent = "正在刷新所选 X 页面，以加载新版任务脚本…";
       await chrome.tabs.reload(activeTab.id);
       await waitForTabLoad(activeTab.id);
       controller = await checkTaskController(activeTab.id);
     }
-    if (controller?.controllerVersion !== 23) {
+    if (controller?.controllerVersion !== 35) {
       throw new Error("新版任务脚本仍未响应。请确认扩展已重新加载，再刷新 X 页面重试。");
     }
     if ((mode !== "engagement" || autoFollowBackOption.checked) && !controller.identityAvailable) {
@@ -151,6 +152,7 @@ async function startTask(mode) {
     };
     await chrome.storage.local.set({ automationRunning: false });
     await chrome.tabs.sendMessage(activeTab.id, { type: "taskControl", running: false }).catch(() => {});
+    if (mode === "ranking") await prepareRankingJob(controller);
     await chrome.storage.local.set({
       ...selectedTasks,
       automationTask: mode,

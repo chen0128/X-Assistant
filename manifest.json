@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "用于 X 平台的效率辅助工具。",
   "permissions": ["storage", "tabs", "scripting"],
-  "host_permissions": ["https://x.com/*", "https://twitter.com/*", "https://api.openai.com/*", "https://api.daitu.cc/*", "https://heidawang.top/*"],
+  "host_permissions": ["https://xbangdan.com/*", "https://x.com/*", "https://twitter.com/*", "https://api.openai.com/*", "https://api.daitu.cc/*", "https://heidawang.top/*"],
   "action": {
     "default_title": "X助手",
     "default_popup": "popup.html"
@@ -16,7 +16,7 @@
   "content_scripts": [
     {
       "matches": ["https://x.com/*", "https://twitter.com/*"],
-      "js": ["follower-monitor.js", "content.js"],
+      "js": ["follow-rate-limit.js", "follower-monitor.js", "ranking-task.js", "content.js"],
       "css": ["content.css"],
       "run_at": "document_idle"
     }

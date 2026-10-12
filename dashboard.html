@@ -74,6 +74,37 @@
           <button class="danger" type="button" data-stop-task="followBackFollowers">停止</button>
         </div>
       </section>
+      <section class="task-category" aria-labelledby="rankingHeading">
+        <div class="category-heading">
+          <div><h2 id="rankingHeading">榜单博主互动</h2><p>选择分类 → 优先评论最新帖子 → 确认成功后关注</p></div>
+          <span class="task-state" data-state-for="ranking">未运行</span>
+        </div>
+        <div class="category-actions">
+          <button id="openRanking" type="button">打开榜单选择分类</button>
+          <button id="refreshRankingSources" type="button">刷新榜单标签页</button>
+        </div>
+        <label for="rankingSource">已选择分类的榜单页面</label>
+        <select id="rankingSource"></select>
+        <div class="relationship-limits ranking-filters">
+          <label>榜单类型<select id="rankingMode"><option value="">沿用网站当前选择</option><option value="rising">黑马榜</option><option value="all">普通账号榜</option></select></label>
+          <label>排序<select id="rankingSort"><option value="">沿用网站当前选择</option><option value="粉丝">粉丝</option><option value="推文曝光">推文曝光</option><option value="发帖">发帖</option><option value="评论">评论</option><option value="涨粉">涨粉</option><option value="帖均曝光">帖均曝光</option><option value="最高单帖">最高单帖</option></select></label>
+          <label>榜单时间<select id="rankingPeriod"><option value="">沿用网站当前选择</option><option value="今天">今天</option><option value="昨日">昨日</option><option value="7天">7天</option><option value="30天">30天</option></select></label>
+          <label>赛道<select id="rankingCategory"><option value="">沿用网站当前选择</option><option value="全部">全部</option><option value="AI">AI</option><option value="财经">财经</option><option value="自媒体">自媒体</option></select></label>
+          <label>粉丝范围<select id="rankingAudience"><option value="">沿用网站当前选择</option><option value="5000 粉以下">5000 粉以下</option><option value="5000 到 1 万粉">5000 到 1 万粉</option><option value="全部">全部</option><option value="1千以下">1千以下</option><option value="1千-1万">1千-1万</option><option value="1万-10万">1万-10万</option><option value="10万-100万">10万-100万</option><option value="100万+">100万+</option></select></label>
+        </div>
+        <div class="relationship-limits">
+          <label>导入 / 检查博主数量（自定义）<input id="rankingLimit" type="number" min="1" step="1" value="20"></label>
+          <label>同时处理博主数<input id="rankingConcurrency" type="number" min="1" max="10" step="1" value="1"></label>
+          <label>每路博主间隔（秒）<input id="rankingInterval" type="number" min="5" max="3600" value="30"></label>
+        </div>
+        <button id="importRanking" type="button">导入当前分类（自动向后翻页）</button>
+        <p id="rankingImportStatus" role="status">尚未导入博主</p>
+        <p class="note">可直接在上方选择榜单类型、排序、时间、赛道和粉丝范围；选择“沿用网站当前选择”时保留网站设置。黑马粉丝范围适用于黑马榜，普通粉丝范围适用于普通账号榜。导入时应用筛选并从第一页开始。不判断活跃度或互动情况，按发布时间优先选择已加载的最新可评论帖子（跳过已处理帖子）。评论沿用固定回复/AI 回复设置。每位博主只评论一条帖子，发送结果不确定时跳过重发。此任务将上方选中的 X 标签页作为控制页，并打开独立后台标签页并行处理博主；与首页任务切换运行。停止会关闭任务标签页。</p>
+        <div class="category-actions">
+          <button class="primary" type="button" data-start-task="ranking">开始榜单互动</button>
+          <button class="danger" type="button" data-stop-task="ranking">停止</button>
+        </div>
+      </section>
       <label class="idle-refresh-setting" for="idleRefreshMinutes">无新内容或评论后刷新</label>
       <select id="idleRefreshMinutes">
         <option value="1">1 分钟</option>
@@ -85,6 +116,7 @@
       <button id="openOptions" type="button">回复 / API 设置</button>
       <p class="note">首页任务会自动下滑加载内容；长时间没有新内容时自动刷新。停止后会取消后续操作。</p>
     </main>
+    <script src="ranking-dashboard.js"></script>
     <script src="dashboard.js"></script>
   </body>
 </html>

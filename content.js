@@ -17,11 +17,13 @@ let settings = {
   unfollowIntervalSeconds: 10,
   followBackAccountLimit: 50,
   followBackIntervalSeconds: 10,
+  relationshipFollowCooldownUntil: 0,
   automationRunning: false
 };
 let recoveryTimer = null;
 let recovering = false;
 let taskFeedUrl = null;
+let rankingWorkerJobKey = null;
 let pending = Promise.resolve();
 let engagementRoundRunning = false;
 let scanningRound = false;
@@ -70,12 +72,26 @@ function relationshipRowFollowsYou(row) {
   return /(?:^|\s)(?:follows you|关注了你)(?:\s|$)/i.test((row.innerText || "").replace(/\s+/g, " ").trim());
 }
 
+function isOuterPostNode(post, node) {
+  let parent = node.parentElement;
+  while (parent && parent !== post) {
+    if (parent.matches('article,[data-testid="tweet"]')) return false;
+    // Quoted cards are links containing their own author/body, unlike a timestamp link.
+    if (parent.matches('[role="link"],a[href*="/status/"]') &&
+      parent.querySelector('[data-testid="User-Name"],[data-testid="tweetText"]')) return false;
+    parent = parent.parentElement;
+  }
+  return parent === post;
+}
+
+function getOuterPostTime(post) {
+  return [...post.querySelectorAll('time[datetime]')].find((node) => isOuterPostNode(post, node)) || null;
+}
+
 function findPostText(article) {
-  const markedText = [...article.querySelectorAll('[data-testid="tweetText"]')]
-    .map((node) => node.innerText.trim())
-    .filter(Boolean)
-    .join("\n");
-  return markedText;
+  return [...article.querySelectorAll('[data-testid="tweetText"]')]
+    .filter((node) => isOuterPostNode(article, node))
+    .map((node) => node.innerText.trim()).filter(Boolean).join("\n");
 }
 
 function matchedTerms(text) {
@@ -105,8 +121,10 @@ function getPostContainers() {
 }
 
 function getPostId(post) {
-  const statusLink = [...post.querySelectorAll('a[href*="/status/"]')]
-    .find((link) => /\/status\/\d+/.test(link.getAttribute("href") || ""));
+  const statusLink = getOuterPostTime(post)?.closest('a[href*="/status/"]') ||
+    [...post.querySelectorAll('a[href*="/status/"]')].find((link) =>
+      isOuterPostNode(post, link) && !link.querySelector('[data-testid="tweetText"],[data-testid="User-Name"]') &&
+      /\/status\/\d+/.test(link.getAttribute("href") || ""));
   return statusLink?.getAttribute("href") || null;
 }
 
@@ -215,7 +233,7 @@ function queueOwnPostCommentReply(article) {
 
 function processPost(article) {
   if (!article.isConnected || settings.automationTask !== "engagement") return;
-  if (settings.ownPostCommentReply && isOwnPostThreadPage()) {
+  if (settings.automationTask === "engagement" && settings.ownPostCommentReply && isOwnPostThreadPage()) {
     queueOwnPostCommentReply(article);
     return;
   }
@@ -335,31 +353,59 @@ async function runAutomaticActions(article, postText, generation, shouldFollow, 
   await chrome.storage.local.set({ lastAutomationStatus: `已评论 @${author}` });
 }
 
-async function sendReplyToPost(article, draft, generation) {
+async function sendReplyToPost(article, draft, generation, options = {}) {
   if (!isTaskActive(generation)) throw new Error("任务已停止");
   const targetId = getPostId(article)?.match(/\/status\/(\d+)/)?.[1];
   const targetArticle = article.isConnected ? article : getPostContainers().find((post) =>
     getPostId(post)?.match(/\/status\/(\d+)/)?.[1] === targetId);
   if (!targetArticle || !targetId) throw new Error("目标帖子已离开页面，已跳过");
-  const { uncertainReplyPostIds = [] } = await chrome.storage.local.get({ uncertainReplyPostIds: [] });
-  if (uncertainReplyPostIds.includes(targetId)) {
+  const attemptKey = `replyAttempt:${getCurrentUsername()}:${targetId}`;
+  const attempts = await chrome.storage.local.get(["uncertainReplyPostIds", attemptKey]);
+  if ((attempts.uncertainReplyPostIds || []).includes(targetId) || attempts[attemptKey]) {
     await chrome.storage.local.set({ lastAutomationStatus: "此帖已有发送尝试记录，跳过重发以避免重复评论" });
     return false;
   }
   const targetAuthor = getAuthor(targetArticle);
   const targetText = findPostText(targetArticle);
   const replyButton = targetArticle.querySelector('[data-testid="reply"]');
-  if (!replyButton) throw new Error("找不到此帖的回复按钮");
-  const editorSelector = '[contenteditable="true"][role="textbox"], [contenteditable="true"][data-testid^="tweetTextarea_"]';
+  if (!options.inline && !replyButton) throw new Error("找不到此帖的回复按钮");
+  if (options.inline && location.pathname.match(/\/status\/(\d+)/)?.[1] !== targetId) {
+    throw new Error("行内回复必须位于目标帖子的详情页");
+  }
+  const editorSelector = '[contenteditable="true"][role="textbox"], [contenteditable="plaintext-only"][role="textbox"], [contenteditable="true"][data-testid^="tweetTextarea_"], [data-testid^="tweetTextarea_"] [contenteditable="true"], .DraftEditor-root [contenteditable="true"]';
   const visibleEditorsBeforeClick = new Set([...document.querySelectorAll(editorSelector)]
     .filter((editor) => editor.getClientRects().length > 0));
   let composerStage = "未发现回复弹窗或行内输入框";
   await chrome.storage.local.set({ lastAutomationStatus: `已读取回复内容（${draft.length} 字符），正在定位回复框` });
   targetArticle.scrollIntoView({ block: "center", behavior: "instant" });
-  replyButton.click();
+  if (!options.inline) replyButton.click();
   const confirmedAudienceButtons = new Set();
   const composer = await waitForElement(() => {
     if (!isTaskActive(generation)) return { stopped: true };
+    if (options.inline) {
+      const scope = document.querySelector('[data-testid="primaryColumn"]');
+      const liveTarget = getPostContainers().find((post) =>
+        getPostId(post)?.match(/\/status\/(\d+)/)?.[1] === targetId && getAuthor(post) === targetAuthor);
+      if (!scope || !liveTarget || !scope.contains(liveTarget) || location.pathname.match(/\/status\/(\d+)/)?.[1] !== targetId) return null;
+      if ([...document.querySelectorAll('[role="dialog"],[role="alertdialog"]')].some((node) => node.getClientRects().length)) {
+        composerStage = "仍有弹窗遮挡详情页，请关闭弹窗";
+        return null;
+      }
+      const nextPost = [...scope.querySelectorAll('article')].filter((node) => !node.parentElement?.closest('article')).find((node) => node !== liveTarget &&
+        !liveTarget.contains(node) && (liveTarget.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING));
+      const candidates = [...scope.querySelectorAll(editorSelector)].filter((candidate) =>
+        candidate.isContentEditable && candidate.getClientRects().length &&
+        getComputedStyle(candidate).visibility !== "hidden" && !candidate.querySelector(editorSelector) &&
+        !candidate.closest('[role="dialog"],[role="alertdialog"]') &&
+        (liveTarget.contains(candidate) || (liveTarget.compareDocumentPosition(candidate) & Node.DOCUMENT_POSITION_FOLLOWING)) &&
+        (!nextPost || (candidate.compareDocumentPosition(nextPost) & Node.DOCUMENT_POSITION_FOLLOWING)));
+      composerStage = `目标详情页行内编辑器 ${candidates.length} 个；等待唯一空回复框及回复按钮`;
+      if (candidates.length !== 1 || getEditorText(candidates[0])) return null;
+      const editor = candidates[0];
+      if (!findReplySubmitButton(scope, false, editor)) return null;
+      editor.scrollIntoView({ block: "center", behavior: "instant" });
+      return { editor, scope };
+    }
     const done = findReplyAudienceDoneButton(editorSelector);
     if (done && !confirmedAudienceButtons.has(done)) {
       confirmedAudienceButtons.add(done);
@@ -370,24 +416,31 @@ async function sendReplyToPost(article, draft, generation) {
       .filter((dialog) => dialog.getClientRects().length > 0);
     const currentArticle = getPostContainers().find((post) =>
       getPostId(post)?.match(/\/status\/(\d+)/)?.[1] === targetId);
-    if (currentArticle) scopes.push(currentArticle);
+    if (!scopes.length && currentArticle) scopes.push(currentArticle);
     // Detail pages can place the inline composer beside, rather than inside, the article.
-    if (location.pathname.match(/\/status\/(\d+)/)?.[1] === targetId) {
+    if (!scopes.some((scope) => scope.matches('[role="dialog"],[role="alertdialog"]')) &&
+      location.pathname.match(/\/status\/(\d+)/)?.[1] === targetId) {
       const column = document.querySelector('[data-testid="primaryColumn"]');
       if (column) scopes.push(column);
     }
     for (const scope of scopes) {
+      const matchDetails = {};
       const targetPresent = replyScopeMatchesTarget(scope, targetId, targetAuthor, targetText,
-        scope.matches('[role="dialog"],[role="alertdialog"]'));
+        scope.matches('[role="dialog"],[role="alertdialog"]'), matchDetails);
       if (!targetPresent) {
-        composerStage = "发现容器，但目标作者或正文未匹配";
+        composerStage = `目标 @${targetAuthor || "未知"}：作者${matchDetails.authorMatches ? "匹配" : "未匹配"}，正文${matchDetails.textMatches ? "匹配" : "未匹配"}；正文节点 ${matchDetails.textNodes || 0} 个`;
         continue;
       }
-      composerStage = "目标帖子已匹配，等待可编辑的空回复框";
-      const editor = [...scope.querySelectorAll(editorSelector)].find((candidate) =>
-        candidate.getClientRects().length > 0 &&
-        (!visibleEditorsBeforeClick.has(candidate) || scope.matches('[role="dialog"],[role="alertdialog"]')) &&
-        !getEditorText(candidate));
+      const candidates = [...scope.querySelectorAll(editorSelector)];
+      const visible = candidates.filter((candidate) => candidate.getClientRects().length > 0 &&
+        getComputedStyle(candidate).visibility !== "hidden" && candidate.isContentEditable);
+      const empty = visible.filter((candidate) => !getEditorText(candidate));
+      const inDialog = scope.matches('[role="dialog"],[role="alertdialog"]');
+      const onTargetDetail = location.pathname.match(/\/status\/(\d+)/)?.[1] === targetId;
+      const editor = empty.find((candidate) =>
+        (!visibleEditorsBeforeClick.has(candidate) || inDialog || onTargetDetail) &&
+        findReplySubmitButton(scope, false, candidate));
+      composerStage = `目标已匹配：编辑器 ${candidates.length} 个，可见可编辑 ${visible.length} 个，空框 ${empty.length} 个；${empty.length ? "等待同一容器中的回复按钮" : "等待空回复编辑器"}`;
       if (editor) return { editor, scope };
     }
     return null;
@@ -398,7 +451,7 @@ async function sendReplyToPost(article, draft, generation) {
   try {
     if (!isTaskActive(generation)) throw new Error("任务已停止");
     const replyModeButton = await waitForElement(() => findReplySubmitButton(scope, false, editor), 1500);
-    if (!replyModeButton) throw new Error("新弹窗没有可确认的回复按钮；已阻止输入内容");
+    if (!replyModeButton) throw new Error("回复编辑器没有可确认的回复按钮；已阻止输入内容");
     await chrome.storage.local.set({ lastAutomationStatus: "已找到回复框，正在写入回复内容" });
     insertTextIntoEditor(editor, draft);
     const populatedEditor = await waitForElement(() =>
@@ -413,16 +466,20 @@ async function sendReplyToPost(article, draft, generation) {
       throw new Error("回复发送前任务已停止");
     }
     if (!sendButton) throw new Error("回复按钮没有启用；已阻止点击“发帖”按钮");
-    const uncertain = await chrome.storage.local.get({ uncertainReplyPostIds: [] });
-    await chrome.storage.local.set({ uncertainReplyPostIds: [...new Set([...uncertain.uncertainReplyPostIds, targetId])] });
+    await chrome.storage.local.set({ [attemptKey]: { attemptedAt: Date.now() } });
     if (!isTaskActive(generation)) throw new Error("任务已停止");
+    if (options.beforeSend) await options.beforeSend();
+    if (!isTaskActive(generation)) throw new Error("任务已停止");
+    const previousNotices = new Set([...document.querySelectorAll('[role="status"],[role="alert"]')].map((node) => node.innerText || ""));
     sendButton.click();
     const sent = await waitForElement(() => {
       const successNotice = [...document.querySelectorAll('[role="status"],[role="alert"]')]
-        .some((notice) => /reply sent|回复已发送|你的回复已发送|已发送/.test(notice.innerText || ""));
+        .some((notice) => (!options.strict || !previousNotices.has(notice.innerText || "")) && /reply sent|(?:reply|post) was sent|回复已发送|你的回复已发送|已发送/.test(notice.innerText || ""));
       const dialogClosed = !scope.isConnected || scope.getClientRects().length === 0;
       const editorCleared = !getEditorText(editor);
-      return successNotice || dialogClosed || editorCleared ? true : null;
+      const inlineCleared = options.inline && editor.isConnected && editorCleared &&
+        location.pathname.match(/\/status\/(\d+)/)?.[1] === targetId;
+      return (options.strict ? successNotice || inlineCleared || (!options.inline && dialogClosed && editorCleared) : successNotice || dialogClosed || editorCleared) ? true : null;
     }, 5000);
     if (!sent) throw new Error("点击回复后未确认 X 已发送；未记录为已评论");
   } catch (error) {
@@ -439,7 +496,7 @@ function normalizeReplyText(value) {
   return String(value || "").replace(/\r\n?/g, "\n").replace(/\u00a0/g, " ").trim();
 }
 
-function replyScopeMatchesTarget(scope, targetId, author, text, isNewDialog) {
+function replyScopeMatchesTarget(scope, targetId, author, text, isNewDialog, details = {}) {
   if ([...scope.querySelectorAll('a[href*="/status/"]')]
     .some((link) => link.getAttribute("href")?.match(/\/status\/(\d+)/)?.[1] === targetId)) return true;
   if (!isNewDialog || !author || !text) return false;
@@ -450,10 +507,31 @@ function replyScopeMatchesTarget(scope, targetId, author, text, isNewDialog) {
     } catch { return false; }
   }) || (scope.innerText || "").match(/@[A-Za-z0-9_]{1,15}/g)
     ?.some((handle) => handle.toLowerCase() === `@${author.toLowerCase()}`);
-  const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim();
-  const textMatches = [...scope.querySelectorAll('[data-testid="tweetText"]')]
-    .some((node) => normalize(node.innerText) === normalize(text)) ||
-    normalize(scope.innerText).includes(normalize(text));
+  // Layout whitespace and media URL presentation differ between detail pages and reply modals.
+  const normalize = (value) => String(value || "").normalize("NFC")
+    .replace(/(?:https?:\/\/)?pic\.(?:x|twitter)\.com\/[^\s]+/gi, "")
+    .replace(/[\s\u200b\ufeff]+/g, "").trim();
+  const fullText = normalize(text);
+  const hasCollapsedText = /显示更多|展开全文|show more/i.test(scope.innerText || "");
+  const textNodes = [...scope.querySelectorAll('[data-testid="tweetText"]')];
+  const textMatches = Boolean(fullText) && (textNodes.some((node) => {
+    const displayed = normalize(node.innerText);
+    if (displayed === fullText) return true;
+    if (!hasCollapsedText) return false;
+    const prefix = displayed.replace(/(?:显示更多|展开全文|showmore).*$/i, "").replace(/[.…]+$/, "");
+    return prefix.length >= 64 && fullText.startsWith(prefix);
+  }) || (() => {
+    // Exclude draft text: it must never be used as evidence for the target post.
+    const preview = scope.cloneNode(true);
+    preview.querySelectorAll('[contenteditable],[data-testid^="tweetTextarea_"],button,[role="button"]').forEach((node) => node.remove());
+    const previewText = normalize(preview.textContent);
+    if (previewText.includes(fullText)) return true;
+    const prefix = fullText.slice(0, 120);
+    return hasCollapsedText && prefix.length >= 64 && previewText.includes(prefix);
+  })());
+  details.authorMatches = Boolean(authorMatches);
+  details.textMatches = textMatches;
+  details.textNodes = textNodes.length;
   return authorMatches && textMatches;
 }
 
@@ -501,6 +579,8 @@ function getEditorText(editor) {
   const text = blocks.length
     ? blocks.map((block) => block.textContent || "").join("\n")
     : editor.innerText || editor.textContent || "";
+  // Empty rich-text blocks can contain invisible caret placeholders.
+  if (!String(text).replace(/[\u200b\u200c\u200d\u2060\ufeff]/g, "").trim()) return "";
   return normalizeReplyText(text);
 }
 
@@ -820,6 +900,10 @@ function scheduleRelationshipScan(taskMode, generation) {
       chrome.storage.local.set({ automationRunning: false, lastAutomationStatus: `已达到本次执行数量：${relationshipActionsCompleted} 个账号` });
       return;
     }
+    if (taskMode === "followBackFollowers" && Date.now() < settings.relationshipFollowCooldownUntil) {
+      scheduleRelationshipScan(taskMode, generation);
+      return;
+    }
     scanRelationshipList(taskMode, generation);
     if (relationshipQueued.size === 0) {
       scrollRelationshipList();
@@ -829,6 +913,7 @@ function scheduleRelationshipScan(taskMode, generation) {
 }
 
 function scanRelationshipList(taskMode, generation) {
+  if (taskMode === "followBackFollowers" && Date.now() < settings.relationshipFollowCooldownUntil) return;
   if (!isTaskActive(generation) || settings.automationTask !== taskMode) return;
   const expectedPath = relationshipListPath(taskMode);
   if (!expectedPath || location.pathname.toLowerCase() !== expectedPath.toLowerCase()) return;
@@ -871,9 +956,11 @@ function getRelationshipUsername(row) {
 }
 
 async function processRelationshipUser(row, username, taskMode, actionButton, generation) {
+  if (taskMode === "followBackFollowers" && Date.now() < settings.relationshipFollowCooldownUntil) return;
   if (!row.isConnected || !isTaskActive(generation)) return;
   if (relationshipActionsCompleted >= relationshipTaskConfig(taskMode).limit) return;
   if (!await waitForRelationshipRateSlot(taskMode, generation)) return;
+  if (taskMode === "followBackFollowers" && Date.now() < settings.relationshipFollowCooldownUntil) return;
   if (taskMode === "unfollowNonMutual" && relationshipRowFollowsYou(row)) {
     await chrome.storage.local.set({ lastAutomationStatus: `已跳过 @${username}：对方关注了你` });
     return;
@@ -898,7 +985,8 @@ async function processRelationshipUser(row, username, taskMode, actionButton, ge
   }
 
   const completed = await waitForElement(() => {
-    if (!row.isConnected) return true;
+    if (taskMode === "followBackFollowers" && hasXFollowRateLimit()) return { rateLimited: true };
+    if (!row.isConnected) return taskMode === "unfollowNonMutual" ? true : null;
     const currentButtons = [...row.querySelectorAll('button,[role="button"]')];
     if (taskMode === "unfollowNonMutual") {
       return currentButtons.some((button) => button.getAttribute("data-testid") === "follow" ||
@@ -907,6 +995,13 @@ async function processRelationshipUser(row, username, taskMode, actionButton, ge
     return currentButtons.some((button) => button.getAttribute("data-testid") === "unfollow" ||
       /^(?:following|正在关注|已关注)(?:\s|$)/i.test(controlLabel(button))) ? true : null;
   }, 5000);
+  if (completed?.rateLimited) {
+    settings.relationshipFollowCooldownUntil = Date.now() + 180000;
+    relationshipTried.clear();
+    await chrome.storage.local.set({ relationshipFollowCooldownUntil: settings.relationshipFollowCooldownUntil,
+      lastAutomationStatus: "检测到 X 速度限制提示，回关等待 3 分钟后重试", lastAutomationError: "" });
+    return;
+  }
   if (!completed) throw new Error(`X 未确认对 @${username} 的${taskMode === "unfollowNonMutual" ? "取消关注" : "回关"}`);
 
   const key = taskMode === "unfollowNonMutual" ? "unfollowedNonMutual" : "followedBackAuthors";
@@ -946,7 +1041,7 @@ function scheduleFollowCooldownResume(until, generation) {
   const delay = Math.max(1000, until - Date.now());
   followResumeTimer = setTimeout(async () => {
     followResumeTimer = null;
-    if (!isTaskActive(generation) || location.pathname !== "/home") return;
+    if (!isTaskActive(generation) || !isTaskFeedPage()) return;
     const { followCooldownUntil = 0 } = await chrome.storage.local.get({ followCooldownUntil: 0 });
     if (Date.now() < followCooldownUntil) {
       scheduleFollowCooldownResume(followCooldownUntil, generation);
@@ -959,7 +1054,7 @@ function scheduleFollowCooldownResume(until, generation) {
 }
 
 function restoreFollowCooldown(generation) {
-  if (!settings.homeFollowMutualPosts || location.pathname !== "/home") return;
+  if (settings.automationTask !== "engagement" || !settings.homeFollowMutualPosts || location.pathname !== "/home") return;
   chrome.storage.local.get({ followCooldownUntil: 0 }).then(({ followCooldownUntil }) => {
     if (!isTaskActive(generation) || Date.now() >= followCooldownUntil) return;
     stopAutoAdvance();
@@ -981,9 +1076,9 @@ function waitForElement(find, timeoutMs) {
 }
 
 function getAuthor(article) {
-  const statusLink = [...article.querySelectorAll('a[href*="/status/"]')]
-    .find((link) => /\/status\/\d+/.test(link.getAttribute("href") || ""));
-  const statusMatch = statusLink?.getAttribute("href")?.match(/^\/(?!i\/)([^/]+)\/status\//);
+  const statusPath = getPostId(article);
+  let statusMatch;
+  try { statusMatch = new URL(statusPath || "", location.origin).pathname.match(/^\/(?!i\/)([^/]+)\/status\//); } catch {}
   if (statusMatch) return statusMatch[1].replace(/^@/, "").toLowerCase();
 
   const usernameLink = article.querySelector('[data-testid="User-Name"] a[href^="/"]');
@@ -1006,7 +1101,8 @@ function getCurrentUsername() {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "taskHandshake") {
     sendResponse({
-      controllerVersion: 23,
+      controllerVersion: 35,
+      username: getCurrentUsername(),
       identityAvailable: Boolean(getCurrentUsername()),
       feedSupported: isTaskFeedPage(),
       ownPostReplySupported: Boolean(ownPostThreadContext())
@@ -1014,7 +1110,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return;
   }
   if (message?.type !== "taskControl") return;
-  if (["engagement", "unfollowNonMutual", "followBackFollowers"].includes(message.taskMode)) {
+  if (["engagement", "ranking", "unfollowNonMutual", "followBackFollowers"].includes(message.taskMode)) {
     settings.automationTask = message.taskMode;
   }
   if (message.settings && typeof message.settings === "object") {
@@ -1046,7 +1142,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }).length + (settings.ownPostCommentReply ? ownCommentCount : 0);
   const relationshipTask = ["unfollowNonMutual", "followBackFollowers"].includes(settings.automationTask);
   const expectedRelationshipPath = relationshipTask ? relationshipListPath(settings.automationTask) : null;
-  const supported = relationshipTask ? Boolean(expectedRelationshipPath) :
+  const supported = settings.automationTask === "ranking" ? Boolean(getCurrentUsername()) : relationshipTask ? Boolean(expectedRelationshipPath) :
     settings.ownPostCommentReply && ownThread ? true :
       (settings.autoFollowBack || settings.homeFollowMutualPosts || settings.homeReplyMutualPosts) && location.pathname === "/home";
   const status = relationshipTask
@@ -1057,7 +1153,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       ? `正在扫描你发布的帖子评论，当前找到 ${ownCommentCount} 条他人评论`
       : null;
   sendResponse({
-    controllerVersion: 23,
+    controllerVersion: 35,
     running: settings.automationRunning,
     supported,
     status,
@@ -1079,11 +1175,13 @@ chrome.storage.local.get({
   unfollowIntervalSeconds: settings.unfollowIntervalSeconds,
   followBackAccountLimit: settings.followBackAccountLimit,
   followBackIntervalSeconds: settings.followBackIntervalSeconds,
+  relationshipFollowCooldownUntil: 0,
   automationRunning: false
 }).then((value) => {
   settings = value;
   settings.automationRunning = false;
   chrome.runtime.sendMessage({ type: "getTaskStateForTab" }).then((taskState) => {
+    rankingWorkerJobKey = taskState?.rankingWorkerJobKey || null;
     if (taskState?.followerMonitor) { runFollowerMonitor(); return; }
     settings.automationTask = taskState?.taskMode || settings.automationTask;
     if (taskState?.running === true) {
@@ -1102,6 +1200,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     settings.autoFollowBack = changes.autoFollowBack.newValue === true;
     if (settings.automationRunning && settings.autoFollowBack) startFollowerMonitor();
   }
+  if (changes.relationshipFollowCooldownUntil) settings.relationshipFollowCooldownUntil = changes.relationshipFollowCooldownUntil.newValue || 0;
   if (changes.automationTask) settings.automationTask = changes.automationTask.newValue || "engagement";
   if (changes.homeFollowMutualPosts) settings.homeFollowMutualPosts = changes.homeFollowMutualPosts.newValue === true;
   if (changes.homeReplyMutualPosts) settings.homeReplyMutualPosts = changes.homeReplyMutualPosts.newValue === true;
@@ -1153,6 +1252,7 @@ function startFollowerMonitor() {
 }
 
 function startCurrentTask(generation) {
+  if (settings.automationTask === "ranking") { runRankingTask(generation); return; }
   startFollowerMonitor();
   if (settings.automationTask === "unfollowNonMutual" || settings.automationTask === "followBackFollowers") {
     startRelationshipTask(settings.automationTask, generation);

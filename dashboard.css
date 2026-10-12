@@ -47,3 +47,7 @@ button.primary:hover { border-color: #1688d4; background: #1688d4; }
 button.danger { border-color: #efc6c6; color: #b42318; }
 .note { margin: 14px 0 0; color: #657786; font-size: 12px; }
 @media (max-width: 600px) { main { width: min(100% - 24px, 520px); margin-top: 20px; } h1 { font-size: 22px; } .filter-options label { width: 48%; font-size: 13px; } }
+
+#rankingSource, #rankingDays { width: 100%; padding: 8px 10px; border: 1px solid #cfd9de; border-radius: 8px; background: white; color: inherit; font: inherit; }
+
+.ranking-filters select { width: 100%; padding: 8px 10px; border: 1px solid #cfd9de; border-radius: 8px; background: white; color: inherit; font: inherit; }

@@ -49,16 +49,15 @@ async function runFollowerMonitor() {
         let limited = false;
         for (let attempt = 0; attempt < 20; attempt += 1) {
           if (!await wait(250)) return;
-          const alerts = [...document.querySelectorAll('[role="alert"],[role="status"],[role="dialog"]')].map((node) => node.innerText || "").join(" ");
-          limited = /rate limit|follow limit|unable to follow|cannot follow|try again later|限速|稍后再试|操作频繁|关注.{0,12}(?:上限|限制|频繁)/i.test(alerts);
+          limited = hasXFollowRateLimit();
           confirmed = row.isConnected && [...row.querySelectorAll('button,[role="button"]')].some((button) => /^(正在关注|已关注|following|取消关注|unfollow)$/i.test(visibleControlText(button)));
           if (limited || confirmed) break;
         }
         if (!confirmed || limited) {
-          const until = Date.now() + 180000;
-          await chrome.storage.local.set({ followerMonitorCooldownUntil: until });
-          await status(`${limited ? "检测到回关限速" : "未确认回关结果"}，3 分钟后重新检查并重试`);
-          if (!await wait(180000)) return;
+          const delay = limited ? 180000 : 30000;
+          if (limited) await chrome.storage.local.set({ followerMonitorCooldownUntil: Date.now() + delay });
+          await status(limited ? "检测到 X 速度限制提示，3 分钟后重试回关" : "未确认回关结果（未检测到限速提示），30 秒后刷新检查");
+          if (!await wait(delay)) return;
           location.reload();
           return;
         }
