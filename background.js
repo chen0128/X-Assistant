@@ -245,6 +245,9 @@ async function requestModelJson(endpoint, options) {
     return await response.json();
   } catch (error) {
     if (controller.signal.aborted) throw new Error("模型请求超过 45 秒，已取消本次请求");
+    if (error instanceof TypeError && /fetch|network/i.test(error.message)) {
+      throw new Error("无法连接 API：请检查接口地址、网络和服务是否可用；更新插件后请重新加载扩展以应用域名权限。刷新 X 页面无法修复 API 连接问题。");
+    }
     throw error;
   } finally {
     clearTimeout(timeout);
