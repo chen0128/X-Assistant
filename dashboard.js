@@ -125,13 +125,13 @@ async function startTask(mode) {
   startTaskButtons.forEach((button) => { button.disabled = true; });
   try {
     let controller = await checkTaskController(activeTab.id);
-    if (controller?.controllerVersion !== 35) {
+    if (controller?.controllerVersion !== 37) {
       taskStatus.textContent = "正在刷新所选 X 页面，以加载新版任务脚本…";
       await chrome.tabs.reload(activeTab.id);
       await waitForTabLoad(activeTab.id);
       controller = await checkTaskController(activeTab.id);
     }
-    if (controller?.controllerVersion !== 35) {
+    if (controller?.controllerVersion !== 37) {
       throw new Error("新版任务脚本仍未响应。请确认扩展已重新加载，再刷新 X 页面重试。");
     }
     if ((mode !== "engagement" || autoFollowBackOption.checked) && !controller.identityAvailable) {
@@ -144,6 +144,7 @@ async function startTask(mode) {
       throw new Error("请先打开自己发布的帖子详情页，再启动“我的帖子：自动回复他人评论”。");
     }
     const selectedTasks = {
+      automationRunId: crypto.randomUUID(),
       autoFollowBack: autoFollowBackOption.checked,
       homeFollowMutualPosts: homeFollowMutualOption.checked,
       homeReplyMutualPosts: homeReplyMutualOption.checked,

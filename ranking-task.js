@@ -116,7 +116,12 @@ async function runRankingTask(generation) {
         const sent = await sendReplyToPost(article, result.draft, generation, {
           inline: true,
           strict: true,
-          beforeSend: () => record(entry, { state: "pending", postId: job.commentPostId })
+          beforeSend: () => record(entry, { state: "pending", postId: job.commentPostId }),
+          cancelBeforeSend: async () => {
+            const key = `rankingAccount:${job.owner}:${entry.username}`;
+            const saved = (await chrome.storage.local.get(key))[key];
+            if (saved?.state === "pending" && saved.postId === job.commentPostId) await chrome.storage.local.remove(key);
+          }
         });
         if (!active()) return;
         if (sent === false) { await advance(`跳过 @${entry.username}：未确认评论发送`); continue; }
@@ -154,9 +159,16 @@ async function runRankingTask(generation) {
     const message = String(error?.message || error).slice(0, 180);
     await status(`${message}；本路等待 30 秒后重试`);
     if (job) { job.retryAt = Date.now() + 30000; await save(); }
-    if (await pause(30000)) {
-      if (job && job.index < job.queue.length) location.assign(rankingTargetUrl(job));
-      else location.reload();
+    while (await pause(30000)) {
+      try {
+        if (!await prepareAutomaticReplyRecovery(active)) return;
+        if (job && job.index < job.queue.length) location.assign(rankingTargetUrl(job));
+        else location.reload();
+        return;
+      } catch (cleanupError) {
+        if (!active()) return;
+        await status(`${cleanupError.message}；本路等待 30 秒后重试`);
+      }
     }
   } finally { rankingTaskBusy = false; }
 }

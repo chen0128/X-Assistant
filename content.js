@@ -8,6 +8,7 @@ const REPLIED_AUTHORS_KEY = "repliedAuthors";
 const REPLIED_POSTS_KEY = "repliedPostIds";
 let settings = {
   automationTask: "engagement",
+  automationRunId: "",
   autoFollowBack: false,
   homeFollowMutualPosts: false,
   homeReplyMutualPosts: false,
@@ -448,6 +449,11 @@ async function sendReplyToPost(article, draft, generation, options = {}) {
   if (composer?.stopped) throw new Error("任务已停止");
   if (!composer) throw new Error(`回复框定位超时：${composerStage}；未写入文字`);
   const { editor, scope } = composer;
+  trackAutomaticReply(editor, scope, targetId, targetAuthor, draft);
+  let commentToken = null;
+  let commentButton = null;
+  let commentNotSent = true;
+  let attemptRecorded = false;
   try {
     if (!isTaskActive(generation)) throw new Error("任务已停止");
     const replyModeButton = await waitForElement(() => findReplySubmitButton(scope, false, editor), 1500);
@@ -460,18 +466,31 @@ async function sendReplyToPost(article, draft, generation, options = {}) {
       ? "回复框内容与预期不一致；未重复写入或发送"
       : "X 编辑器没有接收回复文本");
 
-    const sendButton = await waitForElement(() => findReplySubmitButton(scope, true, editor), 5000);
+    let sendButton = await waitForElement(() => findReplySubmitButton(scope, true, editor), 5000);
     if (!isTaskActive(generation)) {
       closeEmptyReplyDialog(scope, editor, draft);
       throw new Error("回复发送前任务已停止");
     }
     if (!sendButton) throw new Error("回复按钮没有启用；已阻止点击“发帖”按钮");
-    await chrome.storage.local.set({ [attemptKey]: { attemptedAt: Date.now() } });
+    commentToken = await waitForAutomaticCommentSlot(generation);
+    if (!isTaskActive(generation)) throw new Error("任务已停止");
+    sendButton = findReplySubmitButton(scope, true, editor);
+    if (!sendButton || normalizeReplyText(getEditorText(editor)) !== normalizeReplyText(draft)) throw new Error("等待期间回复内容或按钮已变化，未发送");
+    commentButton = sendButton;
+    scope.setAttribute("data-x-helper-comment-scope", commentToken);
+    editor.setAttribute("data-x-helper-comment-editor", commentToken);
+    sendButton.setAttribute("data-x-helper-comment-send", commentToken);
+    await chrome.storage.local.set({ [attemptKey]: { attemptedAt: Date.now(), commentToken } });
+    attemptRecorded = true;
     if (!isTaskActive(generation)) throw new Error("任务已停止");
     if (options.beforeSend) await options.beforeSend();
     if (!isTaskActive(generation)) throw new Error("任务已停止");
     const previousNotices = new Set([...document.querySelectorAll('[role="status"],[role="alert"]')].map((node) => node.innerText || ""));
-    sendButton.click();
+    commentNotSent = false;
+    const sendResult = await chrome.runtime.sendMessage({ type: "sendAutomaticComment", token: commentToken, runId: settings.automationRunId || "", expectedText: draft });
+    if (sendResult?.notSent) commentNotSent = true;
+    if (sendResult?.stopped) throw new Error("任务已停止");
+    if (!sendResult?.clicked) throw new Error(sendResult?.error || "未确认点击回复按钮");
     const sent = await waitForElement(() => {
       const successNotice = [...document.querySelectorAll('[role="status"],[role="alert"]')]
         .some((notice) => (!options.strict || !previousNotices.has(notice.innerText || "")) && /reply sent|(?:reply|post) was sent|回复已发送|你的回复已发送|已发送/.test(notice.innerText || ""));
@@ -484,11 +503,23 @@ async function sendReplyToPost(article, draft, generation, options = {}) {
     if (!sent) throw new Error("点击回复后未确认 X 已发送；未记录为已评论");
   } catch (error) {
     if (getEditorText(editor)) {
-      await chrome.storage.local.set({ lastFailedReplyDraft: { postId: targetId, text: getEditorText(editor), savedAt: Date.now() } });
+      await backupAutomaticReply(editor, targetId, targetAuthor);
       throw new Error(`${error.message}；草稿已备份到扩展本地存储`);
     }
     closeEmptyReplyDialog(scope, editor);
     throw error;
+  } finally {
+    if (commentNotSent && attemptRecorded) {
+      const attempt = (await chrome.storage.local.get(attemptKey))[attemptKey];
+      if (attempt?.commentToken === commentToken) await chrome.storage.local.remove(attemptKey);
+      if (options.cancelBeforeSend) await options.cancelBeforeSend();
+    }
+    if (commentToken) {
+      if (scope.getAttribute("data-x-helper-comment-scope") === commentToken) scope.removeAttribute("data-x-helper-comment-scope");
+      if (editor.getAttribute("data-x-helper-comment-editor") === commentToken) editor.removeAttribute("data-x-helper-comment-editor");
+      if (commentButton?.getAttribute("data-x-helper-comment-send") === commentToken) commentButton.removeAttribute("data-x-helper-comment-send");
+      await chrome.runtime.sendMessage({ type: "cancelAutomaticCommentSlot", token: commentToken }).catch(() => {});
+    }
   }
 }
 
@@ -614,19 +645,15 @@ function insertTextIntoEditor(editor, text) {
   }
 }
 
-function closeEmptyReplyDialog(scope, editor, generatedText = "") {
-  const currentText = getEditorText(editor);
-  if (currentText && currentText !== generatedText.trim()) return;
-  if (currentText) {
-    editor.replaceChildren();
-    editor.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "deleteContentBackward", data: null }));
-  }
-  if (!scope.matches('[role="dialog"],[role="alertdialog"]')) return;
+function closeEmptyReplyDialog(scope, editor) {
+  if (getEditorText(editor)) return false;
+  if (!scope.matches('[role="dialog"],[role="alertdialog"]')) return true;
   const closeButton = [...scope.querySelectorAll('button,[role="button"]')]
-    .find((button) => /(close|关闭|取消)/i.test(
-      `${button.getAttribute("aria-label") || ""} ${button.innerText || ""}`
-    ));
+    .find((button) => button.getClientRects().length &&
+      (button.getAttribute("data-testid") === "app-bar-close" ||
+        /^(?:close|关闭|取消)$/i.test(`${button.getAttribute("aria-label") || button.innerText || ""}`.trim())));
   closeButton?.click();
+  return Boolean(closeButton);
 }
 
 function isTaskActive(generation) {
@@ -651,7 +678,9 @@ function scheduleErrorRecovery(error, generation) {
         updateTaskState(false);
         return;
       }
-      // A full reload also releases stale dialogs and restarts the failed API request via scanning.
+      const stillRunning = () => settings.automationRunning && generation === taskGeneration;
+      if (!await prepareAutomaticReplyRecovery(stillRunning)) return;
+      // Clear the controlled editor before navigation so Chrome does not block on an unsaved draft.
       await chrome.storage.local.set({ lastAutomationStatus: "等待结束，正在刷新 X；页面加载后继续扫描" });
       if (!settings.automationRunning || generation !== taskGeneration) return;
       if (taskFeedUrl && !isTaskFeedPage()) location.replace(taskFeedUrl);
@@ -795,6 +824,7 @@ async function autoAdvance(generation) {
 
 async function refreshCurrentView(generation) {
   if (!isTaskActive(generation)) return;
+  if (!await prepareAutomaticReplyRecovery(() => isTaskActive(generation))) return;
   if (location.pathname === "/home") {
     const findHomeLink = () => {
       const link = document.querySelector('[data-testid="AppTabBar_Home_Link"], a[href="/home"]');
@@ -1101,7 +1131,7 @@ function getCurrentUsername() {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "taskHandshake") {
     sendResponse({
-      controllerVersion: 35,
+      controllerVersion: 37,
       username: getCurrentUsername(),
       identityAvailable: Boolean(getCurrentUsername()),
       feedSupported: isTaskFeedPage(),
@@ -1114,6 +1144,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     settings.automationTask = message.taskMode;
   }
   if (message.settings && typeof message.settings === "object") {
+    if (typeof message.settings.automationRunId === "string") settings.automationRunId = message.settings.automationRunId;
     for (const key of ["autoFollowBack", "homeFollowMutualPosts", "homeReplyMutualPosts", "ownPostCommentReply"]) {
       if (typeof message.settings[key] === "boolean") settings[key] = message.settings[key];
     }
@@ -1153,7 +1184,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       ? `正在扫描你发布的帖子评论，当前找到 ${ownCommentCount} 条他人评论`
       : null;
   sendResponse({
-    controllerVersion: 35,
+    controllerVersion: 37,
     running: settings.automationRunning,
     supported,
     status,
@@ -1166,6 +1197,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
 chrome.storage.local.get({
   automationTask: "engagement",
+  automationRunId: "",
   autoFollowBack: false,
   homeFollowMutualPosts: false,
   homeReplyMutualPosts: false,
@@ -1182,6 +1214,7 @@ chrome.storage.local.get({
   settings.automationRunning = false;
   chrome.runtime.sendMessage({ type: "getTaskStateForTab" }).then((taskState) => {
     rankingWorkerJobKey = taskState?.rankingWorkerJobKey || null;
+    settings.automationRunId = taskState?.runId || settings.automationRunId || "";
     if (taskState?.followerMonitor) { runFollowerMonitor(); return; }
     settings.automationTask = taskState?.taskMode || settings.automationTask;
     if (taskState?.running === true) {

@@ -16,7 +16,7 @@
   "content_scripts": [
     {
       "matches": ["https://x.com/*", "https://twitter.com/*"],
-      "js": ["follow-rate-limit.js", "follower-monitor.js", "ranking-task.js", "content.js"],
+      "js": ["follow-rate-limit.js", "follower-monitor.js", "ranking-task.js", "reply-recovery.js", "comment-pacing.js", "content.js"],
       "css": ["content.css"],
       "run_at": "document_idle"
     }
