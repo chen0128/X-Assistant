@@ -1,4 +1,3 @@
-const autoFollowBackOption = document.getElementById("autoFollowBack");
 const pageStatus = document.getElementById("pageStatus");
 const taskStatus = document.getElementById("taskStatus");
 const actionStatus = document.getElementById("actionStatus");
@@ -6,7 +5,6 @@ const startTaskButtons = [...document.querySelectorAll("[data-start-task]")];
 const stopTaskButtons = [...document.querySelectorAll("[data-stop-task]")];
 const homeFollowMutualOption = document.getElementById("homeFollowMutualPosts");
 const homeReplyMutualOption = document.getElementById("homeReplyMutualPosts");
-const ownPostCommentReplyOption = document.getElementById("ownPostCommentReply");
 const idleRefreshMinutes = document.getElementById("idleRefreshMinutes");
 const targetTabSelect = document.getElementById("targetTab");
 const refreshTabsButton = document.getElementById("refreshTabs");
@@ -18,6 +16,7 @@ const RELATIONSHIP_SETTING_DEFAULTS = {
 };
 const relationshipSettingInputs = Object.fromEntries(Object.keys(RELATIONSHIP_SETTING_DEFAULTS)
   .map((key) => [key, document.getElementById(key)]));
+const boundTabId = Number(new URLSearchParams(location.search).get("tabId"));
 let activeTab;
 let activeTabIsX = false;
 let taskOptionsReady = false;
@@ -25,19 +24,20 @@ let statusReadVersion = 0;
 
 async function loadTaskOptions() {
   const values = await chrome.storage.local.get([
-    "autoFollowBack", "homeFollowMutualPosts", "homeReplyMutualPosts", "mutualTaskEnabled", "homeAutoFollowMutual", "ownPostCommentReply", "autoReply", "autoFollow",
+    "homeFollowMutualPosts", "homeReplyMutualPosts", "mutualTaskEnabled", "homeAutoFollowMutual", "autoReply", "autoFollow",
     "idleRefreshMinutes",
     ...Object.keys(RELATIONSHIP_SETTING_DEFAULTS)
   ]);
   const legacyCombined = values.mutualTaskEnabled ?? (values.autoReply === true || values.autoFollow === true);
   const homeFollowMutualPosts = values.homeFollowMutualPosts ?? (values.homeAutoFollowMutual === true || legacyCombined);
-  const homeReplyMutualPosts = values.homeReplyMutualPosts ?? legacyCombined;
-  const ownPostCommentReply = values.ownPostCommentReply === true;
+  const verification = await chrome.runtime.sendMessage({ type: "followAccessStatus", tabId: boundTabId });
+  const verified = verification?.status?.active === true;
+  document.getElementById("followAccessStatus").textContent = verified ? "验证通过 · 已解锁，请勾选功能二并开始任务" : verification?.status?.message || "尚未验证 · 关注后点击下方按钮";
+  document.getElementById("followAccessStatus").dataset.verified = String(verified);
+  const homeReplyMutualPosts = verified && values.homeReplyMutualPosts === true;
   homeFollowMutualOption.checked = homeFollowMutualPosts;
   homeReplyMutualOption.checked = homeReplyMutualPosts;
-  ownPostCommentReplyOption.checked = ownPostCommentReply;
-  autoFollowBackOption.checked = values.autoFollowBack === true;
-  await chrome.storage.local.set({ homeFollowMutualPosts, homeReplyMutualPosts, ownPostCommentReply });
+  await chrome.storage.local.set({ homeFollowMutualPosts, homeReplyMutualPosts });
   idleRefreshMinutes.value = String([1, 3, 5, 10].includes(Number(values.idleRefreshMinutes)) ? values.idleRefreshMinutes : 3);
   if (![1, 3, 5, 10].includes(Number(values.idleRefreshMinutes))) {
     await chrome.storage.local.set({ idleRefreshMinutes: 3 });
@@ -55,7 +55,6 @@ async function loadTaskOptions() {
 
 async function updateTaskStatus() {
   const readVersion = ++statusReadVersion;
-  const monitor = await chrome.storage.local.get({ followerMonitorStatus: "" });
   const { automationRunning = false, automationTask = "engagement", lastAutomationError = "", lastAutomationStatus = "" } = await chrome.storage.local.get({
     automationRunning: false,
     automationTask: "engagement",
@@ -63,15 +62,13 @@ async function updateTaskStatus() {
     lastAutomationStatus: ""
   });
   if (readVersion !== statusReadVersion) return;
-  document.getElementById("followerMonitorStatus").textContent = autoFollowBackOption.checked ? monitor.followerMonitorStatus : "";
-  const hasSelectedTask = autoFollowBackOption.checked || homeFollowMutualOption.checked || homeReplyMutualOption.checked || ownPostCommentReplyOption.checked;
+  const hasSelectedTask = homeFollowMutualOption.checked || homeReplyMutualOption.checked;
   const taskLabels = {
-    engagement: "关注 / 评论",
-    ranking: "榜单博主互动",
+    engagement: "首页互关",
     unfollowNonMutual: "取消单向关注",
     followBackFollowers: "回关关注者"
   };
-  taskStatus.textContent = automationRunning ? `运行中的任务：${taskLabels[automationTask] || automationTask}` : "任务状态：已停止";
+  taskStatus.textContent = automationRunning ? `运行中 · ${taskLabels[automationTask] || automationTask}` : "待命 · 选择任务后开始";
   const actionMessage = [lastAutomationStatus, lastAutomationError
     ? `最近错误：${lastAutomationError}` : ""].filter(Boolean).join("\n");
   actionStatus.hidden = !actionMessage;
@@ -81,7 +78,7 @@ async function updateTaskStatus() {
     const mode = button.dataset.startTask;
     button.disabled = !activeTabIsX || (mode === "engagement" && !hasSelectedTask) || !taskOptionsReady;
     button.textContent = automationRunning && automationTask === mode
-      ? mode === "engagement" ? "重新开始关注 / 评论" : "重新开始"
+      ? mode === "engagement" ? "重新开始首页任务" : "重新开始"
       : button.dataset.defaultLabel;
   }
   for (const button of stopTaskButtons) {
@@ -89,13 +86,14 @@ async function updateTaskStatus() {
   }
   for (const state of document.querySelectorAll("[data-state-for]")) {
     const running = automationRunning && automationTask === state.dataset.stateFor;
-    state.textContent = running ? "运行中" : "未运行";
+    state.textContent = running ? "运行中" : "待命";
     state.classList.toggle("running", running);
   }
 }
 
 async function updatePageStatus() {
-  const xTabs = await chrome.tabs.query({ url: ["https://x.com/*", "https://twitter.com/*"] });
+  const availableTabs = await chrome.tabs.query({ url: ["https://x.com/*", "https://twitter.com/*"] });
+  const xTabs = boundTabId ? availableTabs.filter((tab) => tab.id === boundTabId) : [];
   const currentSelection = Number(targetTabSelect.value) || Number(new URLSearchParams(location.search).get("tabId"));
   const [focusedTab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const chosenTab = xTabs.find((tab) => tab.id === currentSelection) ||
@@ -120,40 +118,39 @@ targetTabSelect.addEventListener("change", updatePageStatus);
 refreshTabsButton.addEventListener("click", updatePageStatus);
 
 async function startTask(mode) {
+  if (!["engagement", "unfollowNonMutual", "followBackFollowers"].includes(mode)) return;
   if (!activeTab?.id || !activeTabIsX) return;
-  if (mode === "engagement" && !autoFollowBackOption.checked && !homeFollowMutualOption.checked && !homeReplyMutualOption.checked && !ownPostCommentReplyOption.checked) return;
+  if (mode === "engagement" && !homeFollowMutualOption.checked && !homeReplyMutualOption.checked) return;
   startTaskButtons.forEach((button) => { button.disabled = true; });
   try {
+    if (mode === "engagement" && homeReplyMutualOption.checked) {
+      const verification = await chrome.runtime.sendMessage({ type: "verifyFollowAccess", tabId: activeTab.id });
+      if (!verification?.status?.active) throw new Error(verification?.status?.message || "请先验证已关注 @灰小王");
+    }
     let controller = await checkTaskController(activeTab.id);
-    if (controller?.controllerVersion !== 37) {
+    if (controller?.controllerVersion !== "lite-follow-1") {
       taskStatus.textContent = "正在刷新所选 X 页面，以加载新版任务脚本…";
       await chrome.tabs.reload(activeTab.id);
       await waitForTabLoad(activeTab.id);
       controller = await checkTaskController(activeTab.id);
     }
-    if (controller?.controllerVersion !== 37) {
+    if (controller?.controllerVersion !== "lite-follow-1") {
       throw new Error("新版任务脚本仍未响应。请确认扩展已重新加载，再刷新 X 页面重试。");
     }
-    if ((mode !== "engagement" || autoFollowBackOption.checked) && !controller.identityAvailable) {
+    if ((mode !== "engagement") && !controller.identityAvailable) {
       throw new Error("无法识别当前登录账号。请确认 X 已登录并等待页面加载完成。");
     }
     if (mode === "engagement" && !controller.feedSupported) {
-      throw new Error("首页互关任务请打开 X 首页；“我的帖子”任务请打开自己发布的帖子详情页。");
-    }
-    if (mode === "engagement" && ownPostCommentReplyOption.checked && !controller.ownPostReplySupported) {
-      throw new Error("请先打开自己发布的帖子详情页，再启动“我的帖子：自动回复他人评论”。");
+      throw new Error("首页互关任务请打开 X 首页。");
     }
     const selectedTasks = {
       automationRunId: crypto.randomUUID(),
-      autoFollowBack: autoFollowBackOption.checked,
       homeFollowMutualPosts: homeFollowMutualOption.checked,
-      homeReplyMutualPosts: homeReplyMutualOption.checked,
-      ownPostCommentReply: ownPostCommentReplyOption.checked,
+      homeReplyMutualPosts: !homeReplyMutualOption.disabled && homeReplyMutualOption.checked,
       ...Object.fromEntries(Object.entries(relationshipSettingInputs).map(([key, input]) => [key, Number(input.value)]))
     };
     await chrome.storage.local.set({ automationRunning: false });
     await chrome.tabs.sendMessage(activeTab.id, { type: "taskControl", running: false }).catch(() => {});
-    if (mode === "ranking") await prepareRankingJob(controller);
     await chrome.storage.local.set({
       ...selectedTasks,
       automationTask: mode,
@@ -221,14 +218,29 @@ for (const button of startTaskButtons) {
   button.addEventListener("click", () => startTask(button.dataset.startTask));
 }
 
-for (const option of [autoFollowBackOption, homeFollowMutualOption, homeReplyMutualOption, ownPostCommentReplyOption]) {
+for (const option of [homeFollowMutualOption, homeReplyMutualOption]) {
   option.addEventListener("change", async () => {
-    if (!taskOptionsReady) return;
+    if (!taskOptionsReady) { option.checked = false; return; }
+    if (option === homeReplyMutualOption && option.checked) {
+      let verified = false;
+      try {
+        const result = await chrome.runtime.sendMessage({ type: "followAccessStatus", tabId: boundTabId });
+        verified = result?.status?.active === true;
+      } catch {}
+      if (!verified) {
+        option.checked = false;
+        await chrome.storage.local.set({ homeReplyMutualPosts: false });
+        alert("先完成关注验证，即可使用自动评论。\n\n1. 打开 @灰小王 主页并关注。\n2. 返回侧栏，点击「验证关注」。\n3. 验证通过后，重新勾选功能二。");
+        const verify = document.getElementById("verifyFollowAccess");
+        verify.scrollIntoView({ block: "center", behavior: "smooth" });
+        verify.focus({ preventScroll: true });
+        await updateTaskStatus();
+        return;
+      }
+    }
     await chrome.storage.local.set({
-      autoFollowBack: autoFollowBackOption.checked,
       homeFollowMutualPosts: homeFollowMutualOption.checked,
-      homeReplyMutualPosts: homeReplyMutualOption.checked,
-      ownPostCommentReply: ownPostCommentReplyOption.checked
+      homeReplyMutualPosts: !homeReplyMutualOption.disabled && homeReplyMutualOption.checked,
     });
     await updateTaskStatus();
   });
@@ -252,7 +264,7 @@ for (const button of stopTaskButtons) {
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
-  if (changes.followerMonitorStatus || changes.autoFollowBack || changes.automationRunning || changes.automationTask || changes.lastAutomationError || changes.lastAutomationStatus) updateTaskStatus();
+  if (changes.automationRunning || changes.automationTask || changes.lastAutomationError || changes.lastAutomationStatus) updateTaskStatus();
 });
 
 idleRefreshMinutes.addEventListener("change", () => {
@@ -268,22 +280,14 @@ for (const [key, input] of Object.entries(relationshipSettingInputs)) {
   });
 }
 
-document.getElementById("openX").addEventListener("click", async () => {
-  const tab = await chrome.tabs.create({ url: "https://x.com/home" });
-  await new Promise((resolve) => setTimeout(resolve, 500));
-  await updatePageStatus();
-  if (tab?.id) {
-    targetTabSelect.value = String(tab.id);
-    activeTab = tab;
-    activeTabIsX = true;
-    pageStatus.textContent = `已连接：${tab.title || tab.url}`;
-    await updateTaskStatus();
-  }
-});
-
 document.getElementById("openOptions").addEventListener("click", () => {
-  chrome.runtime.openOptionsPage();
+  const settingsFrame = document.getElementById("settingsFrame");
+  settingsFrame.hidden = !settingsFrame.hidden;
+  const button = document.getElementById("openOptions");
+  button.textContent = settingsFrame.hidden ? "打开回复与 API 设置" : "收起回复与 API 设置";
+  button.setAttribute("aria-expanded", String(!settingsFrame.hidden));
+  if (!settingsFrame.hidden && !settingsFrame.src) settingsFrame.src = chrome.runtime.getURL("options.html");
 });
 
 updatePageStatus();
-loadTaskOptions().then(updateTaskStatus);
+loadTaskOptions().then(updateTaskStatus).catch(() => { taskStatus.textContent = "设置加载失败，请重新加载扩展"; });

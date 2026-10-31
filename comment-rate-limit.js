@@ -7,23 +7,27 @@ function withAutomaticCommentLock(operation) {
   return next;
 }
 async function automaticCommentState() {
-  return chrome.storage.local.get(["automationRunning", "automationTask", "automationRunId", "automationTargetTabId", "rankingPool", "automaticCommentRate"]);
+  return chrome.storage.local.get(["automationRunning", "automationTask", "automationRunId", "automationTargetTabId", "automaticCommentRate"]);
 }
 function automaticCommentSenderAllowed(state, sender, runId) {
-  if (!state.automationRunning || (state.automationRunId || "") !== (runId || "")) return false;
-  if (state.automationTask === "engagement") return state.automationTargetTabId === sender.tab?.id;
-  return state.automationTask === "ranking" && state.rankingPool?.workers.some((worker) => worker.tabId === sender.tab?.id && !worker.done);
+  return state.automationRunning === true && state.automationTask === "engagement" &&
+    state.automationTargetTabId === sender.tab?.id && (state.automationRunId || "") === (runId || "");
 }
 async function handleAutomaticComment(message, sender) {
-  const state = await automaticCommentState();
+  let state = await automaticCommentState();
   const rate = state.automaticCommentRate || { nextAllowedAt: 0, lease: null };
-  const now = Date.now();
+  let now = Date.now();
   if (message.type === "cancelAutomaticCommentSlot") {
     if (rate.lease?.token === message.token && rate.lease.tabId === sender.tab?.id) {
       await chrome.storage.local.set({ automaticCommentRate: { ...rate, lease: null } });
     }
     return { canceled: true };
   }
+  if (!automaticCommentSenderAllowed(state, sender, message.runId)) return { stopped: true, notSent: true };
+  const access = await checkFollowAccess(sender.tab.id);
+  if (!access.active) return { error: access.message || "请先完成关注验证", notSent: true };
+  now = Date.now();
+  state = await automaticCommentState();
   if (!automaticCommentSenderAllowed(state, sender, message.runId)) return { stopped: true, notSent: true };
   if (message.type === "requestAutomaticCommentSlot") {
     if (rate.lease && rate.lease.expiresAt > now && rate.lease.runId === (message.runId || "")) {
@@ -38,10 +42,12 @@ async function handleAutomaticComment(message, sender) {
     return { error: "评论发送许可已过期，请重试", notSent: true };
   }
   // Persist before clicking so a worker restart cannot immediately issue another send.
-  await chrome.storage.local.set({ automaticCommentRate: { nextAllowedAt: now + AUTOMATIC_COMMENT_LEASE_MS + AUTOMATIC_COMMENT_INTERVAL_MS, lease: null, sending: { token: message.token, tabId: sender.tab.id, runId: message.runId || "", expiresAt: now + AUTOMATIC_COMMENT_LEASE_MS } } });
+  await chrome.storage.local.set({ automaticCommentRate: { nextAllowedAt: now + AUTOMATIC_COMMENT_LEASE_MS + AUTOMATIC_COMMENT_INTERVAL_MS, lease: null, sending: { token: message.token, tabId: sender.tab.id, runId: message.runId || "", expiresAt: Math.min(now + AUTOMATIC_COMMENT_LEASE_MS, access.expiresAt) } } });
   const [{ result }] = await chrome.scripting.executeScript({
-    target: { tabId: sender.tab.id }, args: [message.token, message.runId || "", message.expectedText],
-    func: async (token, runId, expectedText) => {
+    target: { tabId: sender.tab.id }, args: [message.token, message.runId || "", message.expectedText, access.owner],
+    func: async (token, runId, expectedText, expectedOwner) => {
+      const owner = document.querySelector('[data-testid="AppTabBar_Profile_Link"]')?.getAttribute("href")?.match(/^\/([A-Za-z0-9_]{1,15})\/?$/)?.[1]?.toLowerCase();
+      if (!owner || owner !== expectedOwner) return { error: "登录账号已变化，请重新验证关注", notSent: true };
       const current = await chrome.storage.local.get(["automationRunning", "automationRunId", "automaticCommentRate"]);
       if (!current.automationRunning || (current.automationRunId || "") !== runId) return { stopped: true, notSent: true };
       const sending = current.automaticCommentRate?.sending;

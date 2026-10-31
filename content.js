@@ -9,10 +9,8 @@ const REPLIED_POSTS_KEY = "repliedPostIds";
 let settings = {
   automationTask: "engagement",
   automationRunId: "",
-  autoFollowBack: false,
   homeFollowMutualPosts: false,
   homeReplyMutualPosts: false,
-  ownPostCommentReply: false,
   idleRefreshMinutes: 3,
   unfollowAccountLimit: 50,
   unfollowIntervalSeconds: 10,
@@ -24,7 +22,6 @@ let settings = {
 let recoveryTimer = null;
 let recovering = false;
 let taskFeedUrl = null;
-let rankingWorkerJobKey = null;
 let pending = Promise.resolve();
 let engagementRoundRunning = false;
 let scanningRound = false;
@@ -32,8 +29,6 @@ const writtenReplyEditors = new WeakSet();
 let actionsThisPage = 0;
 let taskGeneration = 0;
 const actedPosts = new Set();
-const ownPostReplyQueued = new Set();
-const OWN_POST_REPLIED_COMMENTS_KEY = "repliedOwnPostComments";
 const relationshipQueued = new Set();
 const relationshipTried = new Set();
 const MAX_ACTIONS_PER_PAGE = 20;
@@ -155,89 +150,50 @@ function showDraft(draft) {
   const dialog = document.createElement("dialog");
   dialog.className = "x-mutual-helper-dialog";
   const title = document.createElement("h2");
-  title.textContent = "回复草稿（请检查后手动发送）";
+  title.textContent = "回复草稿";
+  title.id = `x-helper-draft-${crypto.randomUUID()}`;
+  dialog.setAttribute("aria-labelledby", title.id);
   const textarea = document.createElement("textarea");
   textarea.value = draft;
   textarea.rows = 4;
   const close = document.createElement("button");
   close.textContent = "关闭";
+  close.type = "button";
+  close.className = "x-draft-close";
   close.addEventListener("click", () => dialog.close());
-  dialog.append(title, textarea, close);
+  textarea.setAttribute("aria-label", "审核并编辑回复草稿");
+  const hint = document.createElement("p");
+  hint.textContent = "先检查或编辑内容，再复制到 X 回复框手动发送。";
+  hint.className = "x-draft-hint";
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.textContent = "复制回复";
+  copy.className = "x-draft-copy";
+  const status = document.createElement("p");
+  status.setAttribute("role", "status");
+  status.className = "x-draft-status";
+  copy.addEventListener("click", async () => {
+    if (!textarea.value.trim()) { status.textContent = "请先填写回复内容"; return; }
+    try {
+      await navigator.clipboard.writeText(textarea.value);
+      status.textContent = "已复制，请到 X 回复框粘贴并手动发送";
+    } catch {
+      textarea.focus();
+      textarea.select();
+      status.textContent = "无法自动复制，已选中文本，请按 Ctrl+C 或 ⌘C 复制";
+    }
+  });
+  const actions = document.createElement("div");
+  actions.className = "x-draft-actions";
+  actions.append(copy, close);
+  dialog.append(title, hint, textarea, actions, status);
   dialog.addEventListener("close", () => dialog.remove(), { once: true });
   document.body.append(dialog);
   dialog.showModal();
 }
 
-function ownPostThreadContext() {
-  const match = location.pathname.match(/^\/([A-Za-z0-9_]{1,15})\/status\/(\d+)/i);
-  const ownUsername = getCurrentUsername();
-  if (!match || !ownUsername || match[1].toLowerCase() !== ownUsername) return null;
-  return { username: ownUsername, postId: match[2] };
-}
-
-function isOwnPostThreadPage() {
-  return Boolean(ownPostThreadContext());
-}
-
-function queueOwnPostCommentReply(article) {
-  if (!settings.automationRunning || !article.isConnected || !isTaskActive(taskGeneration)) return;
-  const context = ownPostThreadContext();
-  const commentId = getPostId(article)?.match(/\/status\/(\d+)/)?.[1];
-  const commentAuthor = getAuthor(article);
-  const commentText = findPostText(article);
-  if (!context || !commentId || commentId === context.postId || !commentAuthor ||
-    commentAuthor === context.username || !commentText || actionsThisPage >= MAX_ACTIONS_PER_PAGE) return;
-
-  const rootArticle = getPostContainers().find((post) =>
-    getPostId(post)?.match(/\/status\/(\d+)/)?.[1] === context.postId);
-  const rootText = rootArticle ? findPostText(rootArticle) : "";
-  if (!rootText) return;
-
-  const key = `${context.postId}:${commentId}`;
-  if (ownPostReplyQueued.has(key)) return;
-  ownPostReplyQueued.add(key);
-  const generation = taskGeneration;
-  pending = pending.then(async () => {
-    try {
-      if (!isTaskActive(generation) || !article.isConnected) return;
-      const { [OWN_POST_REPLIED_COMMENTS_KEY]: replied = [] } = await chrome.storage.local.get({
-        [OWN_POST_REPLIED_COMMENTS_KEY]: []
-      });
-      if (replied.includes(key)) return;
-
-      const prompt = `你发布的帖子：\n${rootText}\n\n他人对该帖的评论：\n${commentText}`;
-      const result = await chrome.runtime.sendMessage({
-        type: "generateDraft",
-        postText: prompt,
-        replyContext: "comment"
-      });
-      if (!isTaskActive(generation)) return;
-      if (result?.error || !result?.draft) throw new Error(result?.error || "模型没有返回评论回复");
-      if (await sendReplyToPost(article, result.draft, generation) === false) return;
-      const latest = await chrome.storage.local.get({ [OWN_POST_REPLIED_COMMENTS_KEY]: [] });
-      const repliedComments = [...new Set([...latest[OWN_POST_REPLIED_COMMENTS_KEY], key])].slice(-5000);
-      await chrome.storage.local.set({
-        [OWN_POST_REPLIED_COMMENTS_KEY]: repliedComments,
-        lastAutomationError: "",
-        lastAutomationStatus: `已回复 @${commentAuthor} 对你帖子的评论`
-      });
-      actionsThisPage += 1;
-      lastActivityAt = Date.now();
-    } catch (error) {
-      console.error("X Mutual Helper own-post reply failed", error);
-      scheduleErrorRecovery(error, generation);
-    } finally {
-      ownPostReplyQueued.delete(key);
-    }
-  });
-}
-
 function processPost(article) {
   if (!article.isConnected || settings.automationTask !== "engagement") return;
-  if (settings.automationTask === "engagement" && settings.ownPostCommentReply && isOwnPostThreadPage()) {
-    queueOwnPostCommentReply(article);
-    return;
-  }
   const text = findPostText(article);
   if (!text) return;
   const hits = matchedTerms(text);
@@ -338,6 +294,8 @@ async function runAutomaticActions(article, postText, generation, shouldFollow, 
     return;
   }
 
+  const access = await chrome.runtime.sendMessage({ type: "automaticReplyAccessCheck", runId: settings.automationRunId });
+  if (!access?.status?.active || !isTaskActive(generation)) return;
   const result = await chrome.runtime.sendMessage({ type: "generateDraft", postText });
   if (!isTaskActive(generation)) return;
   if (result?.error || !result?.draft) throw new Error(result?.error || "模型没有返回回复");
@@ -713,7 +671,6 @@ async function runEngagementRound(generation) {
   if (engagementRoundRunning || !isTaskActive(generation) || !isTaskFeedPage()) return;
   engagementRoundRunning = true;
   taskFeedUrl = location.href;
-  startFollowerMonitor();
   try {
     // Freeze this round so DOM mutations cannot keep extending its queue.
     const posts = getPostContainers();
@@ -862,7 +819,7 @@ function getFeedSignature() {
 }
 
 function isTaskFeedPage() {
-  return location.pathname === "/home" || isOwnPostThreadPage();
+  return location.pathname === "/home";
 }
 
 function relationshipListPath(taskMode) {
@@ -1131,21 +1088,24 @@ function getCurrentUsername() {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "taskHandshake") {
     sendResponse({
-      controllerVersion: 37,
+      controllerVersion: "lite-follow-1",
       username: getCurrentUsername(),
       identityAvailable: Boolean(getCurrentUsername()),
       feedSupported: isTaskFeedPage(),
-      ownPostReplySupported: Boolean(ownPostThreadContext())
     });
     return;
   }
   if (message?.type !== "taskControl") return;
-  if (["engagement", "ranking", "unfollowNonMutual", "followBackFollowers"].includes(message.taskMode)) {
+  if (message.running === true && !["engagement", "unfollowNonMutual", "followBackFollowers"].includes(message.taskMode)) {
+    sendResponse({ supported: false, error: "精简版不支持此任务" });
+    return;
+  }
+  if (["engagement", "unfollowNonMutual", "followBackFollowers"].includes(message.taskMode)) {
     settings.automationTask = message.taskMode;
   }
   if (message.settings && typeof message.settings === "object") {
     if (typeof message.settings.automationRunId === "string") settings.automationRunId = message.settings.automationRunId;
-    for (const key of ["autoFollowBack", "homeFollowMutualPosts", "homeReplyMutualPosts", "ownPostCommentReply"]) {
+    for (const key of ["homeFollowMutualPosts", "homeReplyMutualPosts"]) {
       if (typeof message.settings[key] === "boolean") settings[key] = message.settings[key];
     }
   }
@@ -1160,35 +1120,26 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return;
   }
   const posts = getPostContainers();
-  const ownThread = ownPostThreadContext();
-  const ownCommentCount = ownThread
-    ? posts.filter((post) => getPostId(post)?.match(/\/status\/(\d+)/)?.[1] !== ownThread.postId &&
-      getAuthor(post) && getAuthor(post) !== ownThread.username).length
-    : 0;
   const matchCount = posts.filter((post) => {
-    if (settings.ownPostCommentReply && ownThread) return false;
     const hits = matchedTerms(findPostText(post));
     return location.pathname === "/home" && (hits.length > 0) &&
       (settings.homeFollowMutualPosts || settings.homeReplyMutualPosts);
-  }).length + (settings.ownPostCommentReply ? ownCommentCount : 0);
+  }).length;
   const relationshipTask = ["unfollowNonMutual", "followBackFollowers"].includes(settings.automationTask);
   const expectedRelationshipPath = relationshipTask ? relationshipListPath(settings.automationTask) : null;
-  const supported = settings.automationTask === "ranking" ? Boolean(getCurrentUsername()) : relationshipTask ? Boolean(expectedRelationshipPath) :
-    settings.ownPostCommentReply && ownThread ? true :
-      (settings.autoFollowBack || settings.homeFollowMutualPosts || settings.homeReplyMutualPosts) && location.pathname === "/home";
+  const supported = relationshipTask ? Boolean(expectedRelationshipPath) :
+      (settings.homeFollowMutualPosts || settings.homeReplyMutualPosts) && location.pathname === "/home";
   const status = relationshipTask
     ? location.pathname.toLowerCase() === expectedRelationshipPath?.toLowerCase()
       ? `正在扫描 @${getCurrentUsername()} 的${settings.automationTask === "unfollowNonMutual" ? "正在关注" : "关注者"}列表`
       : `正在打开 @${getCurrentUsername()} 的${settings.automationTask === "unfollowNonMutual" ? "正在关注" : "关注者"}列表…`
-    : settings.ownPostCommentReply && ownThread
-      ? `正在扫描你发布的帖子评论，当前找到 ${ownCommentCount} 条他人评论`
-      : null;
+    : null;
   sendResponse({
-    controllerVersion: 37,
+    controllerVersion: "lite-follow-1",
     running: settings.automationRunning,
     supported,
     status,
-    error: supported ? "" : "当前页面不支持所选任务，请打开 X 首页或自己发布的帖子详情页。",
+    error: supported ? "" : "当前页面不支持所选任务，请打开 X 首页或对应关注列表。",
     postCount: posts.length,
     matchCount,
     relationshipCount: document.querySelectorAll('[data-testid="UserCell"]').length
@@ -1198,10 +1149,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 chrome.storage.local.get({
   automationTask: "engagement",
   automationRunId: "",
-  autoFollowBack: false,
   homeFollowMutualPosts: false,
   homeReplyMutualPosts: false,
-  ownPostCommentReply: false,
   idleRefreshMinutes: settings.idleRefreshMinutes,
   unfollowAccountLimit: settings.unfollowAccountLimit,
   unfollowIntervalSeconds: settings.unfollowIntervalSeconds,
@@ -1213,9 +1162,7 @@ chrome.storage.local.get({
   settings = value;
   settings.automationRunning = false;
   chrome.runtime.sendMessage({ type: "getTaskStateForTab" }).then((taskState) => {
-    rankingWorkerJobKey = taskState?.rankingWorkerJobKey || null;
     settings.automationRunId = taskState?.runId || settings.automationRunId || "";
-    if (taskState?.followerMonitor) { runFollowerMonitor(); return; }
     settings.automationTask = taskState?.taskMode || settings.automationTask;
     if (taskState?.running === true) {
       try {
@@ -1229,15 +1176,10 @@ chrome.storage.local.get({
 });
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
-  if (changes.autoFollowBack) {
-    settings.autoFollowBack = changes.autoFollowBack.newValue === true;
-    if (settings.automationRunning && settings.autoFollowBack) startFollowerMonitor();
-  }
   if (changes.relationshipFollowCooldownUntil) settings.relationshipFollowCooldownUntil = changes.relationshipFollowCooldownUntil.newValue || 0;
   if (changes.automationTask) settings.automationTask = changes.automationTask.newValue || "engagement";
   if (changes.homeFollowMutualPosts) settings.homeFollowMutualPosts = changes.homeFollowMutualPosts.newValue === true;
   if (changes.homeReplyMutualPosts) settings.homeReplyMutualPosts = changes.homeReplyMutualPosts.newValue === true;
-  if (changes.ownPostCommentReply) settings.ownPostCommentReply = changes.ownPostCommentReply.newValue === true;
   if (changes.idleRefreshMinutes) {
     settings.idleRefreshMinutes = [1, 3, 5, 10].includes(Number(changes.idleRefreshMinutes.newValue))
       ? Number(changes.idleRefreshMinutes.newValue)
@@ -1249,7 +1191,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (changes.automationRunning && changes.automationRunning.newValue === false) {
     updateTaskState(false);
   }
-  if ((changes.homeFollowMutualPosts || changes.homeReplyMutualPosts || changes.ownPostCommentReply) &&
+  if ((changes.homeFollowMutualPosts || changes.homeReplyMutualPosts) &&
     settings.automationRunning) scan();
 });
 
@@ -1273,20 +1215,10 @@ function updateTaskState(running) {
     stopAutoAdvance();
     actedPosts.clear();
     relationshipQueued.clear();
-    ownPostReplyQueued.clear();
   }
 }
 
-function startFollowerMonitor() {
-  if (!settings.autoFollowBack || settings.automationTask !== "engagement") return;
-  chrome.runtime.sendMessage({ type: "ensureFollowerMonitor", username: getCurrentUsername() }).then((result) => {
-    if (result?.error) chrome.storage.local.set({ followerMonitorStatus: result.error });
-  }).catch(() => {});
-}
-
 function startCurrentTask(generation) {
-  if (settings.automationTask === "ranking") { runRankingTask(generation); return; }
-  startFollowerMonitor();
   if (settings.automationTask === "unfollowNonMutual" || settings.automationTask === "followBackFollowers") {
     startRelationshipTask(settings.automationTask, generation);
     return;
@@ -1306,8 +1238,7 @@ function scan() {
     const matches = posts.filter((post) => {
       const hits = matchedTerms(findPostText(post));
       return (location.pathname === "/home" && (settings.homeFollowMutualPosts || settings.homeReplyMutualPosts) &&
-        (hits.length > 0)) ||
-        (settings.ownPostCommentReply && isOwnPostThreadPage() && getPostId(post)?.match(/\/status\/(\d+)/)?.[1] !== ownPostThreadContext()?.postId);
+        (hits.length > 0));
     }).length;
     chrome.storage.local.set({
       lastAutomationStatus: `扫描进度：当前已加载 ${posts.length} 条帖子，${matches} 条符合所选任务`

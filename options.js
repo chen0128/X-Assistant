@@ -1,5 +1,5 @@
 const defaults = {
-  endpoint: "https://api.daitu.cc/v1/chat/completions",
+  endpoint: "https://hdwai.eu.cc/v1",
   model: "gpt-6-sol",
   apiKey: "",
   replyMode: "ai",
@@ -14,6 +14,7 @@ document.getElementById("replyMode").addEventListener("change", updateReplyMode)
 
 async function load() {
   const values = await chrome.storage.local.get({ ...defaults, apiKey: "" });
+  values.endpoint = defaults.endpoint;
   values.replyMode = values.replyMode === "fixed" ? "fixed" : "ai";
   for (const field of Object.keys(defaults)) {
     document.getElementById(field).value = values[field];
@@ -31,21 +32,8 @@ document.getElementById("save").addEventListener("click", async () => {
     document.getElementById("fixedReplyText").focus();
     return;
   }
-  if (!values.endpoint.startsWith("https://")) {
-    document.getElementById("status").textContent = "API 地址必须使用 HTTPS";
-    return;
-  }
-  try {
-    const url = new URL(values.endpoint);
-    const path = url.pathname.replace(/\/+$/, "");
-    if (!path) url.pathname = "/v1/chat/completions";
-    else if (path.endsWith("/v1")) url.pathname = `${path}/chat/completions`;
-    values.endpoint = url.toString();
-  } catch {
-    document.getElementById("status").textContent = "请填写有效的 API 地址";
-    return;
-  }
-  await chrome.storage.local.set({ ...values, apiEndpointRevision: "daitu-1" });
+  values.endpoint = defaults.endpoint;
+  await chrome.storage.local.set({ ...values, apiEndpointRevision: "hdwai-fixed-1" });
   document.getElementById("status").textContent = "已保存";
   setTimeout(() => { document.getElementById("status").textContent = ""; }, 2000);
 });

@@ -1,13 +1,24 @@
 {
   "manifest_version": 3,
-  "name": "X助手",
+  "name": "X助手精简版",
   "version": "0.1.0",
-  "description": "用于 X 平台的效率辅助工具。",
-  "permissions": ["storage", "tabs", "scripting"],
-  "host_permissions": ["https://xbangdan.com/*", "https://x.com/*", "https://twitter.com/*", "https://api.openai.com/*", "https://api.daitu.cc/*", "https://heidawang.top/*", "https://hdwai.eu.cc/*"],
+  "description": "首页互关帖关注与评论、取消单向关注、回关关注者。",
+  "permissions": [
+    "storage",
+    "tabs",
+    "scripting",
+    "sidePanel"
+  ],
+  "host_permissions": [
+    "https://x.com/*",
+    "https://twitter.com/*",
+    "https://api.openai.com/*",
+    "https://api.daitu.cc/*",
+    "https://heidawang.top/*",
+    "https://hdwai.eu.cc/*"
+  ],
   "action": {
-    "default_title": "X助手",
-    "default_popup": "popup.html"
+    "default_title": "X助手精简版"
   },
   "background": {
     "service_worker": "background.js"
@@ -15,10 +26,24 @@
   "options_page": "options.html",
   "content_scripts": [
     {
-      "matches": ["https://x.com/*", "https://twitter.com/*"],
-      "js": ["follow-rate-limit.js", "follower-monitor.js", "ranking-task.js", "reply-recovery.js", "comment-pacing.js", "content.js"],
-      "css": ["content.css"],
+      "matches": [
+        "https://x.com/*",
+        "https://twitter.com/*"
+      ],
+      "js": [
+        "follow-rate-limit.js",
+        "reply-recovery.js",
+        "comment-pacing.js",
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
       "run_at": "document_idle"
     }
-  ]
+  ],
+  "minimum_chrome_version": "116",
+  "side_panel": {
+    "default_path": "dashboard.html"
+  }
 }

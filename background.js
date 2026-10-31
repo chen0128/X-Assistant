@@ -1,68 +1,24 @@
-importScripts("comment-rate-limit.js");
-const apiEndpointReady = chrome.storage.local.get("apiEndpointRevision").then(async ({ apiEndpointRevision }) => {
-  if (apiEndpointRevision === "daitu-1") return;
-  await chrome.storage.local.set({ endpoint: "https://api.daitu.cc/v1/chat/completions", apiEndpointRevision: "daitu-1" });
-});
-importScripts("ranking-pool.js");
+importScripts("follow-access.js", "comment-rate-limit.js");
+const FIXED_API_ENDPOINT = "https://hdwai.eu.cc/v1";
+const apiEndpointReady = chrome.storage.local.set({ endpoint: FIXED_API_ENDPOINT, apiEndpointRevision: "hdwai-fixed-1" });
 importScripts("follow-rate-limit.js");
-const followRateRuleReady = chrome.storage.local.get(["followRateRuleVersion", "lastAutomationError", "rankingJob", "automationTask"]).then(async (state) => {
-  if (state.automationTask === "hashtags") {
+const followRateRuleReady = chrome.storage.local.get(["followRateRuleVersion", "lastAutomationError", "automationTask"]).then(async (state) => {
+  if (state.automationTask && !["engagement", "unfollowNonMutual", "followBackFollowers"].includes(state.automationTask)) {
     await chrome.storage.local.set({ automationRunning: false, automationTask: "engagement", automationTargetTabId: null,
-      lastAutomationError: "", lastAutomationStatus: "旧标签任务已停用" });
+      lastAutomationError: "", lastAutomationStatus: "不支持的任务已停止" });
   }
   if (state.followRateRuleVersion === 2) return;
-  const updates = { followRateRuleVersion: 2, followCooldownUntil: 0, followerMonitorCooldownUntil: 0, relationshipFollowCooldownUntil: 0 };
+  const updates = { followRateRuleVersion: 2, followCooldownUntil: 0, relationshipFollowCooldownUntil: 0 };
   if (/关注限速|回关限速/.test(state.lastAutomationError || "")) updates.lastAutomationError = "";
-  if (state.rankingJob?.stage === "follow") updates.rankingJob = { ...state.rankingJob, retryAt: 0 };
   await chrome.storage.local.set(updates);
 });
-let followerMonitorStarting = null;
-async function ensureFollowerMonitor(username, senderTabId) {
-  if (followerMonitorStarting) return followerMonitorStarting;
-  followerMonitorStarting = (async () => {
-    const state = await chrome.storage.local.get(["automationRunning", "automationTask", "autoFollowBack", "automationTargetTabId", "followerMonitorTabId"]);
-    if (!state.automationRunning || state.automationTask !== "engagement" || !state.autoFollowBack || senderTabId !== state.automationTargetTabId) return;
-    if (!/^[A-Za-z0-9_]{1,15}$/.test(username || "")) throw new Error("无法识别当前账号，请等待 X 加载后重新启动");
-    if (state.followerMonitorTabId) {
-      const existing = await chrome.tabs.get(state.followerMonitorTabId).catch(() => null);
-      if (existing) return;
-    }
-    const tab = await chrome.tabs.create({ url: "about:blank", active: false });
-    await chrome.storage.local.set({ followerMonitorTabId: tab.id, followerMonitorStatus: "正在打开关注者列表…" });
-    const current = await chrome.storage.local.get(["automationRunning", "autoFollowBack"]);
-    if (!current.automationRunning || !current.autoFollowBack) {
-      await chrome.tabs.remove(tab.id).catch(() => {});
-      return;
-    }
-    await chrome.tabs.update(tab.id, { url: `https://x.com/${username}/followers` });
-  })().finally(() => { followerMonitorStarting = null; });
-  return followerMonitorStarting;
-}
-chrome.storage.onChanged.addListener(async (changes, area) => {
-  if (area !== "local" || !(changes.automationRunning || changes.autoFollowBack || changes.automationTask)) return;
-  const state = await chrome.storage.local.get(["automationRunning", "automationTask", "autoFollowBack", "followerMonitorTabId"]);
-  if (state.automationRunning && state.automationTask === "engagement" && state.autoFollowBack) return;
-  if (state.followerMonitorTabId) await chrome.tabs.remove(state.followerMonitorTabId).catch(() => {});
-  await chrome.storage.local.set({ followerMonitorTabId: null, followerMonitorStatus: "自动回关已停止" });
-});
-chrome.tabs.onRemoved.addListener(async (tabId) => {
-  const state = await chrome.storage.local.get(["followerMonitorTabId"]);
-  if (state.followerMonitorTabId === tabId) await chrome.storage.local.set({ followerMonitorTabId: null, followerMonitorStatus: "回关标签页已关闭" });
-});
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.type === "ensureFollowerMonitor") {
-    ensureFollowerMonitor(message.username, _sender.tab?.id).then(() => sendResponse({ ok: true })).catch((error) => sendResponse({ error: error.message }));
-    return true;
-  }
   if (message?.type === "getTaskStateForTab") {
-    followRateRuleReady.then(() => chrome.storage.local.get({ automationRunning: false, automationTask: "engagement", automationTargetTabId: null, followerMonitorTabId: null, autoFollowBack: false, rankingPool: null, automationRunId: "" }))
+    followRateRuleReady.then(() => chrome.storage.local.get({ automationRunning: false, automationTask: "engagement", automationTargetTabId: null, automationRunId: "" }))
       .then((state) => {
-        const worker = state.automationTask === "ranking" ? state.rankingPool?.workers.find((item) => item.tabId === _sender.tab?.id && !item.done) : null;
         sendResponse({
-        running: state.automationRunning === true && (state.automationTargetTabId === _sender.tab?.id || Boolean(worker)),
-        rankingWorkerJobKey: worker?.jobKey || null,
+        running: state.automationRunning === true && state.automationTargetTabId === _sender.tab?.id,
         runId: state.automationRunId || "",
-        followerMonitor: state.automationRunning && state.autoFollowBack && state.automationTask === "engagement" && state.followerMonitorTabId === _sender.tab?.id,
         taskMode: state.automationTask
       }); })
       .catch(() => sendResponse({ running: false, taskMode: "engagement" }));
@@ -186,14 +142,13 @@ async function generateDraft(postText, replyContext = "post") {
     if (!text) throw new Error("请先在设置中填写固定回复内容并保存。");
     return text;
   }
-  const { apiKey, model, endpoint } = await chrome.storage.local.get({
+  const { apiKey, model } = await chrome.storage.local.get({
     apiKey: "",
-    model: "gpt-6-sol",
-    endpoint: "https://api.daitu.cc/v1/chat/completions"
+    model: "gpt-6-sol"
   });
   if (!apiKey) throw new Error("请先在扩展选项中配置 API Key。");
 
-  const data = await requestModelJson(endpoint, {
+  const data = await requestModelJson(FIXED_API_ENDPOINT, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -253,3 +208,14 @@ async function requestModelJson(endpoint, options) {
     clearTimeout(timeout);
   }
 }
+
+
+function configureTaskPanel(tabId, url) {
+  const enabled = /^https:\/\/(x|twitter)\.com\//.test(url || "");
+  return chrome.sidePanel.setOptions({ tabId, enabled, path: `dashboard.html?tabId=${tabId}` });
+}
+chrome.tabs.onUpdated.addListener((tabId, change, tab) => {
+  if (change.url || change.status === "complete") configureTaskPanel(tabId, tab.url).catch(() => {});
+});
+chrome.tabs.query({}).then((tabs) => Promise.all(tabs.map((tab) => configureTaskPanel(tab.id, tab.url)))).catch(() => {});
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});

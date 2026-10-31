@@ -22,24 +22,65 @@
   cursor: pointer;
 }
 
-.x-mutual-helper-dialog {
-  width: min(480px, calc(100vw - 40px));
-  border: 1px solid #cfd9de;
-  border-radius: 16px;
-  padding: 20px;
-  color: #0f1419;
-  font: 14px/1.5 system-ui, sans-serif;
-}
 
-.x-mutual-helper-dialog::backdrop { background: #0008; }
-.x-mutual-helper-dialog h2 { font-size: 17px; margin: 0 0 12px; }
+.x-mutual-helper-dialog {
+  --draft-bg: #ffffff;
+  --draft-ink: #172333;
+  --draft-muted: #526477;
+  --draft-field: #f6f8fb;
+  --draft-line: #cbd5e1;
+  box-sizing: border-box;
+  color-scheme: light;
+  width: min(520px, calc(100vw - 32px));
+  max-height: calc(100dvh - 40px);
+  overflow: auto;
+  border: 1px solid var(--draft-line);
+  border-radius: 18px;
+  padding: 24px;
+  color: var(--draft-ink);
+  background: var(--draft-bg);
+  box-shadow: 0 24px 80px #0005;
+  font: 14px/1.6 system-ui, sans-serif;
+}
+.x-mutual-helper-dialog::backdrop { background: #0009; }
+.x-mutual-helper-dialog h2 { color: var(--draft-ink); font-size: 20px; line-height: 1.3; margin: 0 0 8px; font-weight: 700; }
+.x-mutual-helper-dialog .x-draft-hint { color: var(--draft-muted); font-size: 13px; margin: 0 0 18px; }
 .x-mutual-helper-dialog textarea {
+  display: block;
   box-sizing: border-box;
   width: 100%;
+  min-height: 150px;
+  max-height: 50dvh;
   resize: vertical;
-  margin: 0 0 12px;
-  border: 1px solid #cfd9de;
-  border-radius: 10px;
-  padding: 10px;
-  font: inherit;
+  margin: 0 0 18px;
+  border: 1px solid var(--draft-line);
+  border-radius: 12px;
+  padding: 14px;
+  background: var(--draft-field);
+  color: var(--draft-ink);
+  caret-color: var(--draft-ink);
+  font: 15px/1.65 system-ui, sans-serif;
+}
+.x-mutual-helper-dialog .x-draft-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.x-mutual-helper-dialog button { min-height: 42px; padding: 9px 18px; border-radius: 10px; font-weight: 600; }
+.x-mutual-helper-dialog .x-draft-copy { background: #1269c7; color: #fff; }
+.x-mutual-helper-dialog .x-draft-copy:hover { background: #0d57a8; }
+.x-mutual-helper-dialog .x-draft-close { background: transparent; color: var(--draft-ink); border: 1px solid var(--draft-line); }
+.x-mutual-helper-dialog .x-draft-close:hover { background: var(--draft-field); }
+.x-mutual-helper-dialog :is(button, textarea):focus-visible { outline: 3px solid #4d9fea; outline-offset: 3px; }
+.x-mutual-helper-dialog .x-draft-status { color: var(--draft-muted); font-size: 12px; margin: 12px 0 0; overflow-wrap: anywhere; }
+.x-mutual-helper-dialog .x-draft-status:empty { display: none; }
+@media (prefers-color-scheme: dark) {
+  .x-mutual-helper-dialog {
+    color-scheme: dark;
+    --draft-bg: #17202c;
+    --draft-ink: #eef3fa;
+    --draft-muted: #b4c1d3;
+    --draft-field: #101720;
+    --draft-line: #435169;
+  }
+}
+@media (max-width: 420px) {
+  .x-mutual-helper-dialog { padding: 18px; }
+  .x-mutual-helper-dialog .x-draft-copy { flex: 1; }
 }

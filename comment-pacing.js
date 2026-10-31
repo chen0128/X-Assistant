@@ -10,8 +10,7 @@ async function waitForAutomaticCommentSlot(generation) {
     if (result?.token) return result.token;
     const waitMs = Math.max(100, Number(result?.retryAfterMs) || 1000);
     const text = `评论间隔为 15 秒，等待 ${Math.ceil(waitMs / 1000)} 秒后发送`;
-    if (rankingWorkerJobKey) await chrome.runtime.sendMessage({ type: "rankingWorkerStatus", jobKey: rankingWorkerJobKey, status: text });
-    else await chrome.storage.local.set({ lastAutomationStatus: text });
+    await chrome.storage.local.set({ lastAutomationStatus: text });
     await new Promise((resolve) => setTimeout(resolve, Math.min(1000, waitMs)));
   }
   throw new Error("任务已停止");

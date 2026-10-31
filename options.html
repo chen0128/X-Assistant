@@ -3,22 +3,22 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>X助手设置</title>
+    <title>X助手精简版设置</title>
+    <link rel="stylesheet" href="ui.css">
     <style>
-      body { max-width: 680px; margin: 40px auto; padding: 0 20px; color: #17202a; font: 15px/1.6 system-ui, sans-serif; }
-      label { display: block; margin: 18px 0 6px; font-weight: 600; }
-      input, select, textarea { box-sizing: border-box; width: 100%; padding: 10px; border: 1px solid #9aa7b2; border-radius: 8px; font: inherit; }
-      textarea { resize: vertical; }
-      button { margin-top: 20px; border: 0; border-radius: 999px; padding: 10px 18px; background: #1d9bf0; color: white; font: inherit; cursor: pointer; }
-      .note { color: #536471; }
-      .disclaimer { margin-top: 32px; padding-top: 20px; border-top: 1px solid #d8dee4; color: #536471; }
-      .disclaimer h2 { color: #17202a; font-size: 18px; }
-      .disclaimer p { margin: 10px 0; }
-      #status { margin-left: 12px; color: #087443; }
+      body { max-width:680px; margin:0 auto; padding:20px 16px; background:var(--surface); }
+      h1 { margin:0 0 18px; font-size:18px; }
+      label { display:block; margin:15px 0 6px; font-size:12px; font-weight:600; }
+      textarea { resize:vertical; min-height:110px; }
+      #save { width:100%; margin-top:14px; }
+      #status { display:block; margin-top:8px; color:var(--success); font-size:12px; }
+      .note { margin:10px 0; overflow-wrap:anywhere; }
+      .disclaimer { margin-top:24px; padding-top:16px; border-top:1px solid var(--line); color:var(--muted); font-size:11px; }
+      .disclaimer h2 { font-size:13px; color:var(--ink); }
     </style>
   </head>
   <body>
-    <h1>X助手</h1>
+    <h1>回复与 API 设置</h1>
     <label for="replyMode">回复方式</label>
     <select id="replyMode">
       <option value="ai">AI 回复</option>
@@ -28,13 +28,13 @@
       <label for="fixedReplyText">固定回复内容</label>
       <textarea id="fixedReplyText" rows="4" placeholder="输入你希望发布的回复内容"></textarea>
     </div>
-    <label for="endpoint">API 地址</label>
-    <input id="endpoint" type="url" placeholder="https://api.daitu.cc/v1/chat/completions">
+    <label for="endpoint">API 地址（固定）</label>
+    <input id="endpoint" type="url" value="https://hdwai.eu.cc/v1" readonly aria-readonly="true">
     <label for="model">模型名称</label>
     <input id="model" type="text" placeholder="gpt-6-sol">
     <label for="apiKey">API Key</label>
     <input id="apiKey" type="password" autocomplete="off" placeholder="sk-…">
-    <p class="note">Key 保存在此浏览器的扩展本地存储中。请填写代兔平台创建的 API 密钥。</p>
+    <p class="note">Key 保存在此浏览器的扩展本地存储中。请填写 hdwai.eu.cc 平台创建的 API 密钥。</p>
     <button id="save">保存设置</button><span id="status" role="status"></span>
     <section class="disclaimer" aria-labelledby="disclaimerHeading">
       <h2 id="disclaimerHeading">免责声明</h2>
@@ -44,7 +44,7 @@
       <p>AI 自动生成的评论及回复可能存在不准确、不恰当或不符合预期的情况，请使用者自行审核并对最终发布内容负责。</p>
       <p>本插件不鼓励垃圾评论、恶意刷量、骚扰他人或其他违反平台规则的行为。</p>
       <p>使用本插件即代表您已阅读、理解并接受以上说明。</p>
-      <p>作者：<a href="https://x.com/Pengchenop" target="_blank" rel="noreferrer">@Pengchenop</a></p>
+      <p>作者：<a href="https://x.com/jixu_ai" target="_blank" rel="noreferrer">@灰小王</a></p>
     </section>
     <script src="options.js"></script>
   </body>
